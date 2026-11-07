@@ -1,0 +1,4 @@
+# 本仓所有文本文件按仓库内容原样保存（不做 CRLF 转换）。
+# 理由：u-boot 侧的文件（.dts/.c/.h/Makefile）来自 Linux/QSDK，必须保持 LF；
+# 一旦被 Windows 检出成 CRLF，`diff` 与版权头校验会全线报错。
+* -text

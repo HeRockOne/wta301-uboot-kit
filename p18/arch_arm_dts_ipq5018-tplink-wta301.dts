@@ -1,0 +1,323 @@
+/*
+ * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+
+/dts-v1/;
+#include "ipq5018-soc.dtsi"
+/ {
+	host_name = "TP-Link WTA301";
+	model ="ipq5018-tplink-wta301";
+	compatible = "qca,ipq5018-mp03.3-m1", "qca,ipq5018";
+	/*
+	 * Level-1 factory_boot passes the machid it got from SMEM, and on this
+	 * board that value is 0x08040000 (printenv: machid=8040000; the stock
+	 * mtd4 DTB table has an entry with exactly that key).  The value below
+	 * was inherited from ipq5018-cmcc_mr3000d-ci.dts and is 0x08040802, i.e.
+	 * it never matched, so the combined-DTB lookup only worked through the
+	 * "no match -> use the first entry" fallback in parse_combined_fdt().
+	 * Declaring the machid level-1 actually sends makes the selection direct
+	 * and deterministic (this is what ipq5018-cucc_vs010.dts does).
+	 */
+	machid = <0x8040000>;
+	config_name = "config@mp03.3-m1", "config-mp03.3-m1";
+
+	aliases {
+		console = "/serial@78AF000";
+		i2c0 = "/i2c@78b7000";
+		gmac_gpio = "/gmac_gpio";
+		usb0 = "/xhci@8a00000";
+		nand = "/nand-controller@79B0000";
+	};
+
+	/*
+	 * /keys —— 进网页刷机页的物理入口（do_httpd_check() -> is_any_button_pressed_*）。
+	 *
+	 * 2026-11-05 在板上直接读 TLMM IN_OUT 寄存器实测（不是揣测）：
+	 *
+	 *     GPIO20 IN_OUT = 0x00000001   bit0=1 高电平 = 未按下
+	 *     GPIO17 IN_OUT = 0x00000001   同上
+	 *     GPIO38 IN_OUT = 0x00000003   是输出脚，根本不是按键
+	 *
+	 * 历史：本文件曾把 reset@27 / wps@38 抄自 ipq5018-cmcc_mr3000d-ci.dts
+	 * （**另一块板**），GPIO38 常低导致 do_httpd_check() 每次上电都判成
+	 * "wps 按住" -> 直进 httpd、永不进 OpenWrt。当时的错误是把整个 /keys
+	 * 节点删掉（见 fw_dec.h/TODO 历史），正确做法是**改对 GPIO 号**。
+	 *
+	 * 真值来源：内核 DTS ipq5018-wta301.dts:124-134
+	 *     key-reset { gpios = <&tlmm 20 GPIO_ACTIVE_LOW>; }   linux,code KEY_RESTART
+	 *     key-wps   { gpios = <&tlmm 17 GPIO_ACTIVE_LOW>; }   linux,code KEY_WPS_BUTTON
+	 * 同一块板、同一个 pinctrl，P17 已在 Linux 侧实测 pressed/released。
+	 *
+	 * pull 用 GPIO_PULL_UP（内核用 bias-disable）：保证悬空时读 1，
+	 * 按住接 GND 时读 0。两脚空闲实测就是 1，加内上拉只是多一层保险。
+	 */
+	keys {
+		compatible = "gpio-keys";
+
+		reset {
+			gpio = <20>;
+			func = <0>;
+			drvstr = <GPIO_8MA>;
+			pull = <GPIO_PULL_UP>;
+			oe = <GPIO_OE_DISABLE>;
+			active_level = <GPIO_ACTIVE_LOW>;
+		};
+
+		wps {
+			gpio = <17>;
+			func = <0>;
+			drvstr = <GPIO_8MA>;
+			pull = <GPIO_PULL_UP>;
+			oe = <GPIO_OE_DISABLE>;
+			active_level = <GPIO_ACTIVE_LOW>;
+		};
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+        led_red {
+			label = "power_led";
+            gpio = <30>;
+            func = <0>;
+            out = <GPIO_OUT_HIGH>;
+            drvstr = <GPIO_8MA>;
+            pull = <GPIO_PULL_DOWN>;
+            oe = <GPIO_OE_ENABLE>;
+            active_level = <GPIO_ACTIVE_HIGH>;
+        };
+
+        led_green {
+			label = "blink_led", "system_led";
+            gpio = <46>;
+            func = <0>;
+            out = <GPIO_OUT_LOW>;
+            drvstr = <GPIO_8MA>;
+            pull = <GPIO_PULL_DOWN>;
+            oe = <GPIO_OE_ENABLE>;
+            active_level = <GPIO_ACTIVE_HIGH>;
+        };
+    };
+
+	console: serial@78AF000 {
+		status = "ok";
+		serial_gpio {
+			blsp0_mux_uart_rx {
+				gpio = <20>;
+				func = <0>;
+				pull = <GPIO_PULL_DOWN>;
+				drvstr = <GPIO_8MA>;
+				od_en = <GPIO_OD_DISABLE>;
+			};
+			blsp0_mux_uart_tx {
+				gpio = <21>;
+				func = <0>;
+				pull = <GPIO_PULL_DOWN>;
+				drvstr = <GPIO_8MA>;
+				od_en = <GPIO_OD_DISABLE>;
+			};
+			blsp0_uart_rx {
+				gpio = <28>;
+				func = <3>;
+				pull = <GPIO_NO_PULL>;
+				drvstr = <GPIO_8MA>;
+				od_en = <GPIO_OD_DISABLE>;
+			};
+			blsp0_uart_tx {
+				gpio = <29>;
+				func = <3>;
+				pull = <GPIO_NO_PULL>;
+				drvstr = <GPIO_8MA>;
+				od_en = <GPIO_OD_DISABLE>;
+			};
+		};
+	};
+
+	nand: nand-controller@79B0000 {
+		status = "okay";
+		nand_gpio {
+			qspi_dat3 {
+				gpio = <4>;
+				func = <2>;
+				od_en = <GPIO_OD_DISABLE>;
+				drvstr = <GPIO_8MA>;
+			};
+			qspi_dat2 {
+				gpio = <5>;
+				func = <2>;
+				od_en = <GPIO_OD_DISABLE>;
+				drvstr = <GPIO_8MA>;
+			};
+			qspi_dat1 {
+				gpio = <6>;
+				func = <2>;
+				od_en = <GPIO_OD_DISABLE>;
+				drvstr = <GPIO_8MA>;
+			};
+			qspi_dat0 {
+				gpio = <7>;
+				func = <2>;
+				od_en = <GPIO_OD_DISABLE>;
+				drvstr = <GPIO_8MA>;
+			};
+			qspi_cs_n {
+				gpio = <8>;
+				func = <2>;
+				od_en = <GPIO_OD_DISABLE>;
+				drvstr = <GPIO_8MA>;
+			};
+			qspi_clk {
+				gpio = <9>;
+				func = <2>;
+				od_en = <GPIO_OD_DISABLE>;
+				drvstr = <GPIO_8MA>;
+			};
+		};
+	};
+
+	pci0: pci@80000000 {
+		status = "disabled";
+	};
+
+	pci1: pci@a0000000 {
+		status = "ok";
+		perst_gpio = <15>;
+		mode = "fixed";
+		pci_gpio {
+			pci_rst {
+				gpio = <15>;
+				func = <0>;
+				pull = <GPIO_NO_PULL>;
+				oe = <GPIO_OD_ENABLE>;
+				od_en = <GPIO_OD_DISABLE>;
+				drvstr = <GPIO_8MA>;
+			};
+		};
+	};
+
+	/*
+	 * usb0 carries GPIO26 as usb_pwr_gpio.  On this board GPIO26 is ALSO the
+	 * RTL8367S switch reset line, so this node has been deleted and restored
+	 * twice; both times the deletion broke Ethernet and the restore fixed it.
+	 *
+	 * 2026-11-02 19:1x (this version): RESTORED.  Removing it changed u-boot.bin
+	 * from md5 b679dd87 (HTTP 200 on this board) to 057f08a6 (ARP dead, link up
+	 * 100M, three follow-up single-variable attempts all still dead).  Treat the
+	 * node as load-bearing until an A/B ping test says otherwise.
+	 * USB itself is off in the defconfig (no CONFIG_USB / DM_USB / USB_XHCI_IPQ),
+	 * so nothing here depends on the driver - it is the GPIO state that matters.
+	 */
+
+	usb0: xhci@8a00000 {
+		usb_pwr_gpio = <26>;
+		usb_gpio {
+			pwr_gpio {
+				gpio = <26>;
+				func = <0>;
+				pull = <GPIO_PULL_UP>;
+				oe = <GPIO_OE_ENABLE>;
+				od_en = <GPIO_OD_DISABLE>;
+				drvstr = <GPIO_8MA>;
+			};
+		};
+	};
+
+	gmac_cfg {
+		ext_mdio_gpio = <36 37>;
+		/*
+		 * Realtek RTL8367S reset line.  The four front-panel jacks are the
+		 * switch's internal PHYs; GPIO26 is its reset (the v19 kernel DTS
+		 * derived from the live board says reset-gpios = <&tlmm 26 ...>).
+		 * When set, board_eth_init() pulses it and then brings the switch up
+		 * over SMI itself - see drivers/net/ipq5018/rtl8367s.c.  Unset to
+		 * disable the whole step (single-variable switch).
+		 */
+		rtl8367s_reset_gpio = <26>;
+
+		gmac1_cfg {
+			unit = <0>;
+			base = <0x39C00000>;
+			phy_address = <7>;
+		};
+		/*
+		 * gmac2 (eth1) carries the on-board switch.  Fields below are taken from
+		 * the stock DTB for THIS board (machid 0x08040000, exported to
+		 * work/out-final/dtbcmp/fac/01_08040000.dtb) with exactly one rename:
+		 *
+		 *   stock:  rtl_switch_enable = <1>
+		 *   ours:   phy_external_link = <1>
+		 *
+		 * Both names land in the same struct slot.  Verified at instruction level:
+		 * stock board code (0x49906cfc reads "s17c_switch_enable" into
+		 * [r5-8]) and the else-branch at 0x49906c14 stores "rtl_switch_enable"
+		 * into [r5-4]; our board/qca/arm/ipq5018/ipq5018.c:1198 reads
+		 * "phy_external_link" into the field right after `ipq_swith`.  Our build's
+		 * gmac literal table (0x49909140..) reads phy_external_link, our binary
+		 * contains no "rtl_switch_enable" string at all.
+		 *
+		 * Why it matters: drivers/net/ipq5018/ipq5018_gmac.c:890 gates the switch
+		 * bring-up on
+		 *     gmac_cfg->ipq_swith && phy_external_link && !priv->ipq_swith
+		 * so with phy_external_link missing the guard never passes,
+		 * priv->ipq_swith stays 0, ipq5018_s17c_Link_Update() is never reached and
+		 * the eth%d link reads as "Down" forever (printout
+		 * "eth0  Down Speed :10 Half duplex" + "Link status/Get speed/Get duplex
+		 * not mapped").  s17c_switch_enable must stay non-zero for the same guard.
+		 *
+		 * Switch port map matches stock: 4 ports at PHY 0..3.  mac_pwr /
+		 * s17c_switch_enable / switch_port_count / switch_phy_address /
+		 * switch_gpio are all RESTORED (2026-11-02 19:1x) after the "clean" version
+		 * without them failed to pass a single packet.  switch_gpio also runs
+		 * ppe_uniphy_refclk_set()/set_forceMode() plus the reset pulse, i.e. it
+		 * supplies the switch reference clock; the stock DTB has no switch_gpio,
+		 * but the stock u-boot never initialises the switch at all, so its
+		 * absence there is not evidence that the clock is unnecessary.
+		 */
+		gmac2_cfg {
+			unit = <1>;
+			base = <0x39D00000>;
+			/*
+			 * Fixed 2500base-x to the on-board Realtek RTL8367S CPU port.
+			 *
+			 * Evidence chain (all from this project's own assets):
+			 *  - Our v19 kernel DTS work/op-assets/dts/ipq5018-wta301.dts,
+			 *    derived from the live board's /proc/device-tree:
+			 *      switch@1d { compatible = "realtek,rtl8365mb"; reg = <0x1d>;
+			 *                  ports { port@0=wan port@1..3=lan1..3
+			 *                          port@6=cpu { ethernet=<&gmac1>;
+			 *                                      phy-mode="2500base-x";
+			 *                                      fixed-link{speed=2500;} } } }
+			 *  - Level-1 u-boot (mtd0) contains the Realtek SDK driver
+			 *    (rtk_switch_init / rtk_vlan_init / rtk_port_macForceLinkExt_set /
+			 *     rtk_port_sgmiiNway_set / rtl8367c) and prints exactly
+			 *    "Set RTL8367 SGMII 2.5Gbps" on this board; mtd4 contains none
+			 *    of them, so level-1 already leaves the switch initialised and
+			 *    forcing the CPU-port link. Nothing here may re-init or reset it.
+			 *  - Therefore: no MDIO PHY (mdio1 addr 0 reads 0xffffffff forever,
+			 *    which is normal), no QCA8337, and no switch reset GPIO.
+			 */
+			fixed_link_2500 = <1>;
+			/*
+			 * RESTORED 2026-11-02 19:1x.  These five fields were dropped in the
+			 * 17:02 "clean up gmac2_cfg" edit and networking broke as a direct
+			 * result; they are here byte-for-byte as in the build that served
+			 * HTTP 200 on this board (u-boot.bin md5 b679dd87, banner 15:56:55).
+			 * Do not delete them again without an A/B ping test.
+			 */
+			mac_pwr = <0xaa545>;
+			s17c_switch_enable = <1>;
+			switch_port_count = <5>;
+			switch_phy_address = <0 1 2 3 4>;
+			switch_gpio = <39>;
+		};
+	};
+};

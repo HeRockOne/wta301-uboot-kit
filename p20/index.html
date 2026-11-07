@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<title>WTA301 · 恢复控制台</title>
+<style>
+:root{
+  color-scheme:light;
+  --bg:#f5f6f8; --card:#fff; --soft:#fafbfc;
+  --line:#e5e8ee; --line2:#d8dee7;
+  --fg:#111827; --fg2:#5c6879; --fg3:#93a0b0;
+  --acc:#2563eb; --acc-s:#eff4ff;
+  --ok:#0a8f5b; --ok-s:#ecf9f2;
+  --warn:#b45309; --warn-s:#fdf6ea;
+  --err:#d92d20; --err-s:#fdf1f0;
+  --r:14px;
+  --mp:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{
+  background:var(--bg); color:var(--fg);
+  font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ---------- shell: sidebar left, content right ---------- */
+.shell{display:flex; min-height:100vh; align-items:stretch}
+
+aside{
+  width:300px; flex:none; position:sticky; top:0; align-self:flex-start;
+  height:100vh; overflow-y:auto;
+  background:#fff; border-right:1px solid var(--line);
+  display:flex; flex-direction:column;
+}
+main{flex:1; min-width:0; padding:24px 28px 64px}
+.main-in{max-width:760px}
+
+/* brand */
+.brand{display:flex; align-items:center; gap:11px; padding:18px 18px 14px}
+.logo{
+  width:36px;height:36px;flex:none;border-radius:10px;
+  background:var(--acc);color:#fff;display:grid;place-items:center;
+  font-weight:700;font-size:13px;letter-spacing:-.02em;
+}
+.brand h1{margin:0;font-size:15px;font-weight:650;letter-spacing:-.01em;line-height:1.25}
+.brand p{margin:1px 0 0;font-size:11.5px;color:var(--fg3)}
+
+/* status pill */
+.pill{
+  margin:0 18px 14px; display:flex; align-items:center; gap:7px;
+  padding:7px 12px; border-radius:9px; font-size:12.5px;
+  background:var(--soft); border:1px solid var(--line2); color:var(--fg2);
+}
+.dot{width:7px;height:7px;border-radius:99px;background:var(--fg3);flex:none;transition:background .3s}
+.dot.live{background:var(--ok); box-shadow:0 0 0 3px rgba(10,143,91,.15)}
+.dot.bad{background:var(--err); box-shadow:0 0 0 3px rgba(217,45,32,.15)}
+
+/* sidebar info */
+.sinfo{padding:0 18px 14px; border-bottom:1px solid var(--line)}
+.sinfo .hd{
+  font-size:10.5px; font-weight:650; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--fg3); margin:0 0 9px;
+}
+.kv{display:flex; gap:10px; padding:4px 0; font-size:12.5px; align-items:baseline}
+.kv .k{color:var(--fg3); flex:none; width:72px}
+.kv .v{font-family:var(--mp); font-size:11.5px; color:var(--fg); word-break:break-all; min-width:0}
+.kv .v b{font-weight:600}
+
+/* slot rows */
+.slots{padding:14px 18px; border-bottom:1px solid var(--line)}
+.slot{
+  display:flex; align-items:center; gap:8px; padding:7px 9px; margin-bottom:6px;
+  border:1px solid var(--line); border-radius:9px; background:var(--soft);
+  font-size:12px;
+}
+.slot:last-child{margin-bottom:0}
+.slot .nm{font-family:var(--mp); font-size:11.5px; font-weight:600; flex:none; width:58px}
+.slot .st2{font-size:11px; margin-left:auto; flex:none}
+.slot .st2.ok{color:var(--ok)}
+.slot .st2.bad{color:var(--err)}
+.slot .st2.warn{color:var(--warn)}
+.slot .md5{font-family:var(--mp); font-size:10.5px; color:var(--fg3); flex:none}
+.slot.run{border-color:var(--acc); background:var(--acc-s)}
+.slot .tag2{
+  flex:none; font-size:9.5px; font-weight:650; letter-spacing:.04em;
+  padding:1px 5px; border-radius:4px; background:var(--acc); color:#fff;
+}
+
+/* nav */
+nav{padding:10px 10px 20px; flex:1}
+nav button{
+  display:flex; align-items:center; gap:9px; width:100%;
+  appearance:none; border:0; background:none; cursor:pointer;
+  font:inherit; font-size:13.5px; color:var(--fg2);
+  padding:10px 10px; border-radius:9px; text-align:left;
+  transition:background .14s, color .14s;
+}
+nav button:hover{background:var(--soft); color:var(--fg)}
+nav button.on{background:var(--acc-s); color:var(--acc); font-weight:600}
+nav button .ic{width:16px; text-align:center; flex:none; opacity:.85; font-size:13px}
+nav button:focus-visible{outline:2px solid var(--acc); outline-offset:-2px}
+nav .grp{
+  font-size:10.5px; font-weight:650; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--fg3); padding:14px 10px 6px;
+}
+
+/* panel */
+.panel{display:none}
+.panel.on{display:block}
+.panel>h2{
+  margin:0 0 4px; font-size:19px; font-weight:650; letter-spacing:-.01em;
+}
+.panel>.sub{margin:0 0 20px; font-size:13px; color:var(--fg2)}
+
+/* card */
+.card{
+  margin:0 0 16px; border-radius:var(--r); overflow:hidden;
+  background:var(--card); border:1px solid var(--line);
+  box-shadow:0 1px 2px rgba(16,24,40,.04);
+}
+.card>h3{
+  margin:0; padding:12px 18px; font-size:12.5px; font-weight:600;
+  display:flex; align-items:center; gap:9px; flex-wrap:wrap;
+  border-bottom:1px solid var(--line); background:var(--soft);
+}
+.card>h3 .tag{
+  margin-left:auto; font-weight:500; font-size:11px; color:var(--fg2);
+  background:#fff; padding:2px 8px; border-radius:99px; border:1px solid var(--line2);
+  font-family:var(--mp);
+}
+.body{padding:16px 18px}
+
+/* warn */
+.warnbox{
+  display:flex; gap:10px; padding:12px 14px; border-radius:10px;
+  background:var(--warn-s); border:1px solid #f0dcc0; color:#7c3f06;
+  font-size:12.5px; line-height:1.6; margin:0 0 14px;
+}
+.warnbox .wi{flex:none; font-size:14px; line-height:1.4}
+.warnbox b{font-weight:650}
+.note{
+  display:flex; gap:9px; padding:11px 13px; border-radius:10px;
+  background:var(--acc-s); border:1px solid #cfddff; color:#1a3f7a;
+  font-size:12.5px; line-height:1.6; margin:0 0 14px;
+}
+
+/* drop */
+.drop{
+  position:relative; display:block; padding:26px 18px; cursor:pointer; text-align:center;
+  border:1.5px dashed var(--line2); border-radius:12px; background:var(--soft);
+  transition:border-color .2s, background .2s;
+}
+.drop:hover,.drop.arm{border-color:var(--acc); background:var(--acc-s)}
+.drop input{display:none}
+.drop .ico{font-size:20px; color:var(--fg3); line-height:1; margin-bottom:8px}
+.drop:hover .ico,.drop.arm .ico{color:var(--acc)}
+.drop .t1{font-weight:600; font-size:14px}
+.drop .t2{font-size:12.5px; color:var(--fg2); margin-top:5px}
+.drop .t3{font-family:var(--mp); font-size:11px; color:var(--fg3); margin-top:9px}
+
+/* selected file */
+.file{
+  display:none; align-items:center; gap:10px; margin-top:12px;
+  padding:10px 12px; border:1px solid var(--line2); border-radius:10px; background:var(--soft);
+}
+.file.on{display:flex}
+.file .fname{font-family:var(--mp); font-size:12.5px; word-break:break-all; flex:1; min-width:0}
+.file .fsize{font-family:var(--mp); font-size:11.5px; color:var(--fg2); flex:none}
+.file .x{
+  flex:none; width:24px; height:24px; border-radius:7px; cursor:pointer;
+  border:1px solid var(--line2); background:#fff; color:var(--fg3);
+  font-size:15px; line-height:1; padding:0;
+}
+.file .x:hover{color:var(--err); border-color:var(--err); background:var(--err-s)}
+
+/* radio cards */
+.radios{display:grid; gap:8px; margin:0 0 4px}
+.radio{
+  display:flex; gap:10px; align-items:flex-start;
+  padding:11px 13px; border:1px solid var(--line2); border-radius:10px;
+  background:#fff; cursor:pointer; transition:border-color .15s, background .15s;
+}
+.radio:hover{border-color:var(--fg3)}
+.radio input{margin:2px 0 0; flex:none; accent-color:var(--acc)}
+.radio.on{border-color:var(--acc); background:var(--acc-s)}
+.radio .t{font-size:13px; font-weight:550; line-height:1.4}
+.radio .d{font-size:11.5px; color:var(--fg2); margin-top:2px; line-height:1.5}
+
+/* buttons */
+.row{display:flex; gap:10px; flex-wrap:wrap; margin-top:14px}
+button.b{
+  appearance:none; font:inherit; font-size:13.5px; font-weight:550;
+  padding:10px 18px; border-radius:9px; cursor:pointer;
+  border:1px solid var(--line2); background:#fff; color:var(--fg);
+  transition:background .16s, border-color .16s, box-shadow .16s;
+}
+button.b:hover:not(:disabled){background:var(--soft); border-color:var(--fg3)}
+button.b:focus-visible{outline:2px solid var(--acc); outline-offset:2px}
+button.b:disabled{opacity:.45; cursor:not-allowed}
+button.b.go{background:var(--acc); border-color:var(--acc); color:#fff}
+button.b.go:hover:not(:disabled){background:#1d4ed8; border-color:#1d4ed8}
+button.b.danger{background:var(--err-s); border-color:#f3c4c0; color:var(--err)}
+button.b.danger:hover:not(:disabled){background:#fbe4e2; border-color:var(--err)}
+button.b.ghost{background:var(--soft); font-size:12.5px; padding:8px 14px}
+button.b.wide{flex:1}
+
+/* progress */
+.prog{display:none; margin-top:14px}
+.prog.on{display:block}
+.bar{height:6px; border-radius:99px; background:var(--line); overflow:hidden}
+.bar i{display:block; height:100%; width:0; background:var(--acc); transition:width .2s}
+.bar.indet i{width:35%; animation:ind 1.1s ease-in-out infinite}
+@keyframes ind{0%{margin-left:0}50%{margin-left:65%}100%{margin-left:0}}
+.ptxt{display:flex; justify-content:space-between; gap:10px; margin-top:7px; font-size:11.5px; color:var(--fg2); font-family:var(--mp)}
+
+/* status */
+.st{display:none; margin-top:14px; padding:12px 14px; border-radius:10px; border:1px solid var(--line2); background:var(--soft); font-size:12.5px}
+.st.on{display:block}
+.st .h{font-weight:600; font-size:13px}
+.st .m{color:var(--fg2); margin-top:4px; line-height:1.6}
+.st .m ul{margin:6px 0 0; padding-left:18px}
+.st .m li{font-family:var(--mp); font-size:11.5px; word-break:break-all}
+.st.ok{background:var(--ok-s); border-color:#bfe6d3}
+.st.ok .h{color:var(--ok)}
+.st.err{background:var(--err-s); border-color:#f3c4c0}
+.st.err .h{color:var(--err)}
+.st.warn{background:var(--warn-s); border-color:#f0dcc0}
+.st.warn .h{color:var(--warn)}
+
+/* pre */
+pre{
+  margin:0; padding:12px 14px; border-radius:10px; background:#0f172a; color:#cbd5e1;
+  font-family:var(--mp); font-size:11.5px; line-height:1.6;
+  overflow:auto; max-height:420px; white-space:pre-wrap; word-break:break-all;
+}
+pre.lite{background:var(--soft); color:var(--fg); border:1px solid var(--line); max-height:360px}
+.hint{margin:12px 0 0; font-size:12px; color:var(--fg3); line-height:1.6}
+.mono{font-family:var(--mp); font-size:.94em}
+
+/* grid for info cells */
+.grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:1px; background:var(--line)}
+.cell{background:var(--card); padding:13px 18px}
+.cell .k{font-size:11px; color:var(--fg3); margin-bottom:4px}
+.cell .v{font-family:var(--mp); font-size:12.5px; color:var(--fg); word-break:break-all}
+.cell .v b{font-weight:600; color:var(--acc)}
+
+footer{margin-top:28px; padding-top:16px; border-top:1px solid var(--line); font-size:11.5px; color:var(--fg3)}
+footer a{color:var(--fg3)}
+
+/* mobile: stack */
+.mtop{display:none}
+@media (max-width:860px){
+  .shell{display:block}
+  aside{position:static; width:auto; height:auto; border-right:0; border-bottom:1px solid var(--line)}
+  .slots{padding-bottom:10px}
+  nav{display:flex; gap:6px; overflow-x:auto; padding:10px 12px}
+  nav .grp{display:none}
+  nav button{width:auto; white-space:nowrap; padding:8px 12px; font-size:12.5px}
+  nav button .ic{display:none}
+  main{padding:18px 16px 56px}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+
+<aside>
+  <div class="brand">
+    <div class="logo">TL</div>
+    <div>
+      <h1>WTA301</h1>
+      <p>U-Boot 恢复控制台</p>
+    </div>
+  </div>
+
+  <div class="pill" id="pill"><span class="dot" id="dot"></span><span id="pilltxt">连接中…</span></div>
+
+  <div class="sinfo">
+    <p class="hd">系统信息</p>
+    <div class="kv"><span class="k">型号</span><span class="v" id="i-model">—</span></div>
+    <div class="kv"><span class="k">内存</span><span class="v" id="i-ram">—</span></div>
+    <div class="kv"><span class="k">闪存</span><span class="v" id="i-flash">—</span></div>
+    <div class="kv"><span class="k">本机地址</span><span class="v" id="i-ip">—</span></div>
+    <div class="kv"><span class="k">U-Boot</span><span class="v" id="ver">—</span></div>
+  </div>
+
+  <div class="slots">
+    <p class="hd" style="font-size:10.5px;font-weight:650;letter-spacing:.06em;text-transform:uppercase;color:var(--fg3);margin:0 0 9px">槽位状态</p>
+    <div class="slot" id="sl1">
+      <span class="nm">image_1</span>
+      <span class="st2" id="sl1st">检测中…</span>
+      <span class="md5" id="sl1md5"></span>
+    </div>
+    <div class="slot" id="sl2">
+      <span class="nm">image_2</span>
+      <span class="st2" id="sl2st">检测中…</span>
+      <span class="md5" id="sl2md5"></span>
+    </div>
+    <div class="kv" style="margin-top:9px"><span class="k">启动槽</span><span class="v" id="i-run">—</span></div>
+    <div class="kv"><span class="k">固件槽</span><span class="v" id="i-fw">—</span></div>
+  </div>
+
+  <nav>
+    <div class="grp">操作</div>
+    <button data-p="fw" class="on"><span class="ic">▣</span>固件升级</button>
+    <button data-p="ub"><span class="ic">⬡</span>U-Boot</button>
+    <div class="grp">高级</div>
+    <button data-p="env"><span class="ic">≡</span>环境变量</button>
+    <button data-p="raw"><span class="ic">⌗</span>系统信息 / 调试</button>
+    <button data-p="reboot"><span class="ic">↻</span>重启设备</button>
+  </nav>
+</aside>
+
+<main>
+<div class="main-in">
+
+<div id="bootwarn" class="warnbox" style="display:none">
+  <span class="wi">⚠</span>
+  <div>系统固件未通过校验，当前处于恢复模式。上传正确的固件即可恢复正常启动。</div>
+</div>
+
+<!-- ============ 固件升级 ============ -->
+<section class="panel on" id="p-fw">
+  <h2>固件升级</h2>
+  <p class="sub">写入系统固件槽 image_2（A 槽）的 kernel、rootfs 与固件头。</p>
+
+  <div class="card">
+    <h3>选择固件 <span class="tag">最大 17 MB</span></h3>
+    <div class="body">
+      <div class="drop" id="drop">
+        <input type="file" id="file">
+        <div class="ico">⬆</div>
+        <div class="t1">点击选择，或把固件拖到这里</div>
+        <div class="t2">支持 TP-Link 原厂 <span class="mono">.bin</span> 与自编译 <span class="mono">tphdr+kernel+rootfs</span> 合并包</div>
+        <div class="t3">网页刷机请用紧凑包（约 16.4 MB），不要用 TTL 用的稀疏包</div>
+      </div>
+
+      <div class="file" id="chip">
+        <span class="fname" id="fname">—</span>
+        <span class="fsize" id="fsize">—</span>
+        <button class="x" id="fclear" title="移除">×</button>
+      </div>
+
+      <div class="row">
+        <button class="b go wide" id="bcheck" disabled>① 上传并校验</button>
+        <button class="b danger wide" id="bflash" disabled>② 写入 Flash</button>
+      </div>
+
+      <div class="prog" id="prog">
+        <div class="bar" id="bar"><i id="barfill"></i></div>
+        <div class="ptxt"><span id="ptxt">—</span><span id="ppct"></span></div>
+      </div>
+
+      <div class="st" id="st"><div class="h" id="sth"></div><div class="m" id="stm"></div></div>
+
+      <p class="hint">
+        两步式：先上传到内存校验（不改 flash），确认无误后再写入。写入过程中请勿断电。
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ U-Boot ============ -->
+<section class="panel" id="p-ub">
+  <h2>U-Boot 升级</h2>
+  <p class="sub">二级 U-Boot 有两个槽，一级先校验 image_1，通过就启动它。</p>
+
+  <div class="card">
+    <h3>当前槽位</h3>
+    <div class="grid">
+      <div class="cell"><div class="k">image_1 头 / 槽</div><div class="v">0x800000 / 0x700000</div></div>
+      <div class="cell"><div class="k">image_2 头 / 槽</div><div class="v">0x4800000 / 0x4700000</div></div>
+      <div class="cell"><div class="k">槽大小 / 解压上限</div><div class="v">256 KB / 640 KB</div></div>
+      <div class="cell"><div class="k">槽镜像大小</div><div class="v">恰好 <b>262144</b> B</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>写入目标</h3>
+    <div class="body">
+      <div class="radios" id="targets">
+        <label class="radio on">
+          <input type="radio" name="slot" value="0" checked>
+          <span>
+            <span class="t">两槽都写（推荐）</span>
+            <span class="d">先写 image_2 再写 image_1。任何时刻至少一个槽完整；两个槽都换成新版本，冗余不破。</span>
+          </span>
+        </label>
+        <label class="radio">
+          <input type="radio" name="slot" value="1">
+          <span>
+            <span class="t">只写 image_1</span>
+            <span class="d">立即生效（一级先启动它），image_2 保留旧版当回退。要求 image_2 当前校验通过。</span>
+          </span>
+        </label>
+        <label class="radio">
+          <input type="radio" name="slot" value="2">
+          <span>
+            <span class="t">只写 image_2</span>
+            <span class="d">暂不生效——image_1 通过校验时一级不会走到它。用于预置下一版。</span>
+          </span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>选择槽镜像 <span class="tag">262144 B · LZMA</span></h3>
+    <div class="body">
+      <div class="warnbox">
+        <span class="wi">⚠</span>
+        <div>要传的是<b>已压缩的槽镜像</b>（恰好 262144 B 的 LZMA 流 + 0xFF 补齐），<b>不是</b>裸 <span class="mono">u-boot.bin</span>。<br>
+        尺寸不对会被直接拒绝——槽只有 256 KB，装不下就是装不下。</div>
+      </div>
+
+      <div class="drop" id="drop2">
+        <input type="file" id="file2">
+        <div class="ico">⬆</div>
+        <div class="t1">选择 U-Boot 槽镜像</div>
+        <div class="t3" id="fname2">未选择文件</div>
+      </div>
+
+      <div class="row">
+        <button class="b go wide" id="buboot" disabled>上传并校验</button>
+      </div>
+
+      <div class="prog" id="prog2">
+        <div class="bar" id="bar2"><i id="barfill2"></i></div>
+        <div class="ptxt"><span id="ptxt2">—</span><span id="ppct2"></span></div>
+      </div>
+
+      <div class="st" id="st2"><div class="h" id="st2h"></div><div class="m" id="st2m"></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 环境变量 ============ -->
+<section class="panel" id="p-env">
+  <h2>环境变量</h2>
+  <p class="sub">U-Boot 保存的启动参数。改错了可以用下方的「恢复默认」回退。</p>
+
+  <div class="card">
+    <h3>env <span class="tag" id="envtag">—</span></h3>
+    <div class="body">
+      <div class="row" style="margin-top:0;margin-bottom:12px">
+        <button class="b ghost" id="benvload">重新读取</button>
+        <button class="b ghost" onclick="location.href='/env/list'">原始 JSON</button>
+      </div>
+      <pre id="envpre">点击「重新读取」加载…</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 系统信息 / 调试 ============ -->
+<section class="panel" id="p-raw">
+  <h2>系统信息与调试</h2>
+  <p class="sub">供排障和脚本使用的原始数据。</p>
+
+  <div class="card">
+    <h3>快捷入口</h3>
+    <div class="body">
+      <div class="row" style="margin-top:0">
+        <button class="b ghost" onclick="location.href='/sysinfo'">原始系统信息</button>
+        <button class="b ghost" onclick="location.href='/network/info'">网络设置</button>
+        <button class="b ghost" onclick="location.href='/version'">版本</button>
+      </div>
+      <p class="hint">以上接口返回 JSON / 纯文本，供脚本或排障使用。</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>设备树</h3>
+    <div class="body">
+      <div class="row" style="margin-top:0;margin-bottom:12px">
+        <button class="b ghost" id="bfdt">读取 /sysinfo</button>
+        <button class="b ghost" id="bslot">重新检测槽位</button>
+      </div>
+      <pre class="lite" id="rawpre">—</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 重启 ============ -->
+<section class="panel" id="p-reboot">
+  <h2>重启设备</h2>
+  <p class="sub">写入完成后需要重启才会用新固件启动。</p>
+
+  <div class="card">
+    <div class="body">
+      <div class="row" style="margin-top:0">
+        <button class="b danger wide" id="breboot">立即重启</button>
+      </div>
+      <div class="st" id="st3"><div class="h" id="st3h"></div><div class="m" id="st3m"></div></div>
+      <p class="hint">重启后本页面会断开，设备约 10 秒后开始启动。</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  U-Boot failsafe · <span id="fver">—</span> · <a href="/version" class="mono">/version</a>
+</footer>
+
+</div>
+</main>
+</div>
+
+<script>
+(function(){
+"use strict";
+var $=function(id){return document.getElementById(id)};
+var MB=1048576;
+var state={file:null,validated:false,uploaded:false,type:"firmware",target:0};
+
+function fmt(n){
+  if(n>=MB) return (n/MB).toFixed(n>=10*MB?1:2)+" MB";
+  if(n>=1024) return (n/1024).toFixed(1)+" KB";
+  return n+" B";
+}
+function hex8(a){
+  if(!a) return "";
+  var s="";
+  for(var i=0;i<4;i++) s+=("0"+(a[i]||0).toString(16)).slice(-2);
+  return s;
+}
+function setPill(kind,txt){
+  $("dot").className="dot"+(kind?" "+kind:"");
+  $("pilltxt").textContent=txt;
+}
+function status(el,kind,head,msg,list){
+  var box=$(el);
+  box.className="st on"+(kind?" "+kind:"");
+  $(el+"h").textContent=head;
+  var m=$(el+"m");
+  m.textContent=msg||"";
+  if(list&&list.length){
+    var ul=document.createElement("ul");
+    for(var i=0;i<list.length;i++){
+      var li=document.createElement("li");
+      li.textContent=list[i];
+      ul.appendChild(li);
+    }
+    m.appendChild(ul);
+  }
+}
+function clearStatus(el){ $(el).className="st"; }
+
+/* ---------------- nav ---------------- */
+var navs=document.querySelectorAll("nav button[data-p]");
+for(var i=0;i<navs.length;i++){
+  navs[i].addEventListener("click",function(){
+    for(var j=0;j<navs.length;j++) navs[j].classList.remove("on");
+    this.classList.add("on");
+    var ps=document.querySelectorAll(".panel");
+    for(var k=0;k<ps.length;k++) ps[k].classList.remove("on");
+    var t=$("p-"+this.getAttribute("data-p"));
+    if(t) t.classList.add("on");
+    if(this.getAttribute("data-p")==="env" && !state.envLoaded) loadEnv();
+  });
+}
+
+/* ---------------- sysinfo ---------------- */
+function loadInfo(){
+  var x=new XMLHttpRequest();
+  x.open("GET","/sysinfo",true);
+  x.timeout=8000;
+  x.onload=function(){
+    var d;
+    try{ d=JSON.parse(x.responseText) }catch(e){
+      setPill("bad","信息读取失败"); return;
+    }
+    var b=d.board||{}, dev=d.devices||{};
+    $("i-model").textContent=b.model||"—";
+    $("i-ram").textContent=b.ram_size?(b.ram_size/MB).toFixed(0)+" MB":"—";
+    $("i-flash").textContent=(dev.nand&&dev.nand.present&&dev.nand.size)
+      ? (dev.nand.size/MB).toFixed(0)+" MB NAND"
+      : "—";
+    var v=d.uboot_version||"—";
+    $("ver").textContent=v.replace(/^U-Boot\s*/,"");
+    $("fver").textContent=v;
+    $("rawpre").textContent=JSON.stringify(d,null,1).slice(0,4000);
+    setPill("live","在线");
+  };
+  x.onerror=x.ontimeout=function(){
+    setPill("bad","离线");
+    $("i-model").textContent="—";
+  };
+  x.send();
+}
+function loadNet(){
+  var x=new XMLHttpRequest();
+  x.open("GET","/network/info",true);
+  x.onload=function(){
+    try{
+      var d=JSON.parse(x.responseText);
+      $("i-ip").textContent=(d.ipaddr||"?")+(d.netmask?" / "+d.netmask:"");
+    }catch(e){ $("i-ip").textContent="—"; }
+  };
+  x.onerror=function(){ $("i-ip").textContent="—" };
+  x.send();
+}
+
+/* ---------------- slots ---------------- */
+function paintSlot(idx,s,isRun){
+  var el=$("sl"+idx), st=$("sl"+idx+"st"), md=$("sl"+idx+"md5");
+  var ok=s&&s.hdr_ok&&s.md5_match&&s.decode_ok;
+  st.className="st2 "+(ok?"ok":(s&&s.hdr_ok?"warn":"bad"));
+  st.textContent = ok ? "完好"
+    : (!s||!s.hdr_ok) ? "无头 / 未签名"
+    : (!s.md5_match) ? "md5 不符"
+    : "解压失败";
+  md.textContent = s&&s.md5_ok ? s.md5_ok : "";
+  if(isRun) el.classList.add("run"); else el.classList.remove("run");
+}
+function slotBadge(idx,isRun){
+  var el=$("sl"+idx);
+  var t=el.querySelector(".tag2");
+  if(isRun){
+    if(!t){ t=document.createElement("span"); t.className="tag2"; t.textContent="运行中"; el.appendChild(t); }
+  }else if(t){ t.parentNode.removeChild(t); }
+}
+function loadSlots(){
+  var x=new XMLHttpRequest();
+  x.open("GET","/sysinfo/tplink",true);
+  x.timeout=20000;
+  x.onload=function(){
+    var d;
+    try{ d=JSON.parse(x.responseText) }catch(e){
+      $("sl1st").textContent="读取失败"; $("sl2st").textContent="读取失败"; return;
+    }
+    var run=(d.uboot_run&&d.uboot_run.slot)||"";
+    paintSlot(1,d.slots&&d.slots[0],run==="image_1");
+    paintSlot(2,d.slots&&d.slots[1],run==="image_2");
+    slotBadge(1,run==="image_1");
+    slotBadge(2,run==="image_2");
+    $("i-run").textContent=run?(run+(d.uboot_run.assumed?"（按启动顺序推定）":"")):"—";
+    if(d.firmware_slot){
+      $("i-fw").textContent=d.firmware_slot.name+" · "+d.firmware_slot.label;
+    }
+  };
+  x.onerror=x.ontimeout=function(){
+    $("sl1st").textContent="读取失败"; $("sl2st").textContent="读取失败";
+  };
+  x.send();
+}
+
+/* ---------------- env ---------------- */
+function loadEnv(){
+  state.envLoaded=true;
+  var x=new XMLHttpRequest();
+  x.open("GET","/env/list",true);
+  x.onload=function(){
+    var txt=x.responseText;
+    try{
+      var d=JSON.parse(txt);
+      var o=d.env||d.vars||d;
+      var lines=[];
+      if(o&&typeof o==="object"){
+        var ks=Object.keys(o).sort();
+        for(var i=0;i<ks.length;i++) lines.push(ks[i]+" = "+o[ks[i]]);
+        $("envtag").textContent=ks.length+" 项";
+      }
+      $("envpre").textContent=lines.length?lines.join("\n"):txt;
+    }catch(e){ $("envpre").textContent=txt; }
+  };
+  x.onerror=function(){ $("envpre").textContent="读取失败"; };
+  x.send();
+}
+
+/* ---------------- file pick ---------------- */
+function pick(input,dropEl,chipEl,nameEl,enableBtn,maxSize){
+  input.addEventListener("change",function(){ if(input.files[0]) setFile(input.files[0]); });
+  dropEl.addEventListener("click",function(e){ if(e.target!==input) input.click(); });
+  ["dragenter","dragover"].forEach(function(ev){
+    dropEl.addEventListener(ev,function(e){ e.preventDefault(); dropEl.classList.add("arm"); });
+  });
+  ["dragleave","drop"].forEach(function(ev){
+    dropEl.addEventListener(ev,function(e){ e.preventDefault(); dropEl.classList.remove("arm"); });
+  });
+  dropEl.addEventListener("drop",function(e){
+    var f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0];
+    if(f) setFile(f);
+  });
+  function setFile(f){
+    if(maxSize && f.size>maxSize){
+      status("st2","err","文件过大",f.name+" 有 "+fmt(f.size)+"，上限 "+fmt(maxSize)); return;
+    }
+    if(!maxSize && f.size>17*MB){
+      status("st","err","文件过大",f.name+" 有 "+fmt(f.size)+"，上限 17 MB"); return;
+    }
+    state.file=f;
+    nameEl.textContent=f.name;
+    if(chipEl){
+      $("fname").textContent=f.name;
+      $("fsize").textContent=fmt(f.size);
+      chipEl.classList.add("on");
+      dropEl.style.display="none";
+    }
+    if(enableBtn) enableBtn.disabled=false;
+    state.validated=false;
+    clearStatus("st"); clearStatus("st2");
+    $("bflash").disabled=true;
+  }
+}
+
+/* ---------------- upload ---------------- */
+function progress(pct,indet,txt){
+  $("prog").classList.add("on");
+  $("bar").className="bar"+(indet?" indet":"");
+  if(!indet){
+    $("barfill").style.width=pct+"%";
+    $("ppct").textContent=Math.round(pct)+"%";
+  }else{
+    $("ppct").textContent="";
+  }
+  $("ptxt").textContent=txt||"";
+}
+function progressDone(){ $("prog").classList.remove("on"); $("barfill").style.width="0%" }
+
+function describe(info){
+  var out=[];
+  if(!info) return out;
+  if(info.type) out.push("类型: "+info.type);
+  if(info.size) out.push("大小: "+info.size+" B");
+  if(info.md5)  out.push("MD5:  "+info.md5);
+  if(info.reason) out.push("原因: "+info.reason);
+  return out;
+}
+
+function doUpload(field,btn,statusEl,onOk,extra){
+  var f=state.file;
+  if(!f) return;
+  var fd=new FormData();
+  fd.append(field,f,f.name);
+  if(extra) for(var k in extra) if(extra.hasOwnProperty(k)) fd.append(k,extra[k]);
+
+  var x=new XMLHttpRequest();
+  x.open("POST","/upload",true);
+  x.timeout=180000;
+  btn.disabled=true;
+  var canProgress=!!x.upload;
+  progress(0,true,"正在上传…");
+  if(canProgress){
+    x.upload.onprogress=function(e){
+      if(e.lengthComputable) progress(e.loaded/e.total*100,false,"正在上传… "+fmt(e.loaded)+" / "+fmt(e.total));
+    };
+  }
+  x.onload=function(){
+    var d=null;
+    try{ d=JSON.parse(x.responseText) }catch(e){}
+    if(!d){ progressDone(); btn.disabled=false;
+      status(statusEl,"err","响应无法解析",x.responseText.slice(0,300)); return; }
+    if(d.status==="success"){
+      progressDone();
+      state.validated=true; state.uploaded=true; state.type=field;
+      status(statusEl,"ok","校验通过",d.info&&d.info.name?d.info.name:"", describe(d.info));
+      if(onOk) onOk(d);
+    }else{
+      progressDone(); btn.disabled=false;
+      status(statusEl,"err","校验失败","",describe(d.info));
+    }
+  };
+  x.onerror=function(){ progressDone(); btn.disabled=false;
+    status(statusEl,"err","连接中断","上传过程中网络断开，设备可能已停止响应。"); };
+  x.ontimeout=function(){ progressDone(); btn.disabled=false;
+    status(statusEl,"err","超时","传输超过 180 秒仍未完成。"); };
+  x.send(fd);
+}
+
+/* ---------------- flash (step 2) ---------------- */
+/* ★ 这个 POST 必须**不带 body、不设 Content-Type**。
+ *
+ * net/httpd.c:549 解析 POST 时：只要头部出现 Content-Type 却又找不到
+ * "boundary="，立刻 goto bad_request ⇒ 返回 11 字节的 "Bad Request"。
+ * 浏览器对**字符串** body 会自动加 "Content-Type: text/plain;charset=UTF-8"，
+ * 正好落进这个分支 —— 所以以前只要带 body 就必然 400，而前端
+ * JSON.parse 失败后只显示「写入失败」，一个字的原因都看不到。
+ *
+ * 空 body 的 POST 没有 Content-Type 头，走的是和 curl -X POST 同一条路
+ * （历史上所有成功记录都是这条路）。
+ *
+ * 另外：写入目标（slot 0/1/2）在 /upload 阶段就已经交给板子并存在
+ * tpimg_uboot_target 里了，/result 不需要任何参数。 */
+function doFlash(statusEl,btn,onOk){
+  statusEl=statusEl||"st";
+  btn=btn||$("bflash");
+  btn.disabled=true;
+  $("bcheck").disabled=true;
+  progress(0,true,"正在写入 Flash，请勿断电…");
+  var x=new XMLHttpRequest();
+  x.open("POST","/result",true);
+  x.timeout=300000;
+  x.onload=function(){
+    progressDone();
+    var d=null;
+    try{ d=JSON.parse(x.responseText) }catch(e){}
+    if(d&&d.status==="success"){
+      if(onOk) onOk(d);
+    }else if(d){
+      status(statusEl,"err","写入失败","",describe(d.info));
+      $("bcheck").disabled=false; btn.disabled=false;
+    }else{
+      /* 服务端回了非 JSON（或空）—— 把 HTTP 状态和原文摊开，
+       * 别再让失败原因埋在串口里。 */
+      var raw=(x.responseText||"").replace(/\s+/g," ").slice(0,200);
+      status(statusEl,"err","写入失败（服务端未返回 JSON）",
+        "HTTP "+x.status+(raw?"  ·  "+raw:"  ·  空响应"),
+        ["这通常说明请求被 u-boot 的 httpd 直接拒了，",
+         "板子仍在 u-boot，flash 没有被写。"]);
+      $("bcheck").disabled=false; btn.disabled=false;
+    }
+  };
+  x.onerror=function(){ progressDone();
+    status(statusEl,"err","连接中断","写入过程中连接断开，设备可能正在重启或已出错。");
+  };
+  x.ontimeout=function(){ progressDone();
+    status(statusEl,"warn","超时","写入可能仍在进行，请等待 30 秒后刷新页面。");
+  };
+  x.send();
+}
+
+/* ---------------- wire up ---------------- */
+pick($("file"),$("drop"),$("chip"),$("fname"),$("bcheck"),0);
+pick($("file2"),$("drop2"),null,$("fname2"),$("buboot"),262144);
+
+$("fclear").onclick=function(){
+  state.file=null; state.validated=false;
+  $("file").value="";
+  $("chip").classList.remove("on");
+  $("drop").style.display="";
+  $("bcheck").disabled=true;
+  $("bflash").disabled=true;
+  clearStatus("st");
+};
+
+/* target radios */
+var radios=document.querySelectorAll("#targets input[name=slot]");
+for(var r=0;r<radios.length;r++){
+  radios[r].addEventListener("change",function(){
+    var labs=document.querySelectorAll("#targets .radio");
+    for(var q=0;q<labs.length;q++) labs[q].classList.remove("on");
+    var lab=this.closest?this.closest(".radio"):this.parentNode.parentNode;
+    if(lab) lab.classList.add("on");
+    state.target=parseInt(this.value,10)||0;
+  });
+}
+
+$("bcheck").onclick=function(){
+  doUpload("firmware",$("bcheck"),"st",function(){
+    $("bflash").disabled=false;
+    status("st","ok","校验通过，可以写入",
+      "已检查：头 magic、分区几何、kernel/rootfs 边界、载荷 MD5。");
+  });
+};
+
+$("bflash").onclick=function(){
+  if(!state.validated){ return; }
+  if(!confirm("即将写入 Flash。\n\nkernel、rootfs 和固件头都会被覆盖。\n写入期间断电会导致固件损坏。\n\n确认继续？")) return;
+  doFlash("st",$("bflash"),function(){
+    status("st","ok","写入完成","image_2 槽已更新，固件头已重新签名。点「重启设备」用新固件启动。");
+    setPill("live","待重启");
+  },null);
+};
+
+$("buboot").onclick=function(){
+  var btn=$("buboot");
+  var tgt=state.target;
+  var names={"0":"两个槽（image_1 + image_2）","1":"仅 image_1","2":"仅 image_2"};
+  doUpload("uboot",btn,"st2",function(){
+    var msg="即将写入二级 U-Boot：" + names[""+tgt];
+    if(tgt===0){
+      msg+="\n\n先写 image_2 再写 image_1，每槽都是「先槽后头」。\n中途断电任何时刻都至少有一个槽可用。";
+    }else{
+      msg+="\n\n写入前会确认另一个槽当前完好，否则拒绝写入。";
+    }
+    msg+="\n\n确认继续？";
+    if(!confirm(msg)){
+      status("st2","warn","已校验，未写入","可以随时再点一次。");
+      btn.disabled=false;
+      return;
+    }
+    doFlash("st2",btn,function(){
+      var done={"0":"两个槽都已更新并重新签名。","1":"image_1 已更新并重新签名，重启后生效。","2":"image_2 已更新并重新签名（暂不生效）。"};
+      status("st2","ok","U-Boot 已写入",done[""+tgt]);
+      setPill("live","待重启");
+      loadSlots();
+    });
+  },{slot:""+tgt});
+};
+
+$("breboot").onclick=function(){
+  if(!confirm("现在重启设备？")) return;
+  status("st3","warn","正在重启","设备将在数秒内重启，本页面会断开。");
+  var x=new XMLHttpRequest();
+  x.open("POST","/reboot",true);
+  x.onload=x.onerror=function(){};
+  x.send();
+};
+
+$("benvload").onclick=function(){ state.envLoaded=false; loadEnv(); };
+$("bfdt").onclick=function(){ loadInfo(); };
+$("bslot").onclick=function(){ loadSlots(); };
+
+loadInfo();
+loadNet();
+loadSlots();
+})();
+</script>
+</body>
+</html>

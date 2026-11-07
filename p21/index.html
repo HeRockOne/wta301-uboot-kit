@@ -1,0 +1,1118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WTA301 · U-Boot 恢复控制台</title>
+<style>
+:root{
+  --bg:#f5f6f9; --card:#fff; --line:#e3e6ed; --line2:#eef0f4;
+  --ink:#141922; --ink2:#3b4351; --mut:#727a8c; --mut2:#98a0b0;
+  --acc:#3f6ff5; --acc-d:#2f59d0; --acc-bg:#eef3ff;
+  --ok:#0f8456; --ok-bg:#e8f7ef; --warn:#9e6a15; --warn-bg:#fdf3e2; --bad:#c93c35; --bad-bg:#fdeceb;
+  --sh:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.04);
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--bg);color:var(--ink);min-height:100vh;
+  font:14px/1.55 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+button{font:inherit;color:inherit}
+a{color:var(--acc);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* ================= topbar ================= */
+.top{
+  position:sticky;top:0;z-index:20;height:56px;
+  display:flex;align-items:center;gap:18px;padding:0 22px;
+  background:rgba(255,255,255,.94);backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--line);
+}
+.brand{display:flex;align-items:center;gap:9px;flex:0 0 auto}
+.logo{
+  width:29px;height:29px;border-radius:8px;background:var(--acc);color:#fff;
+  font-size:11px;font-weight:700;letter-spacing:.4px;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 1px 3px rgba(63,111,245,.35);
+}
+.bt{font-size:14px;font-weight:650;line-height:1.15}
+.bs{font-size:11px;color:var(--mut);line-height:1.2}
+.pill{
+  display:inline-flex;align-items:center;gap:5px;padding:3px 8px 3px 7px;
+  border-radius:999px;font-size:11px;font-weight:550;
+  background:var(--line2);color:var(--mut);flex:0 0 auto;
+}
+.pill::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.8}
+.pill.on{background:var(--ok-bg);color:var(--ok)}
+.pill.warn{background:var(--warn-bg);color:var(--warn)}
+.pill.bad{background:var(--bad-bg);color:var(--bad)}
+.pill.on::before{animation:pl 2.4s ease-in-out infinite}
+@keyframes pl{0%,100%{opacity:.4}50%{opacity:1}}
+
+.tabs{display:flex;gap:2px;margin-left:auto;flex:0 0 auto}
+.tabs button{
+  display:flex;align-items:center;gap:6px;height:32px;padding:0 12px;
+  border:0;border-radius:7px;background:none;font-size:13px;color:var(--ink2);cursor:pointer;
+}
+.tabs button:hover{background:#f1f3f8}
+.tabs button.on{background:var(--acc-bg);color:var(--acc-d);font-weight:600}
+.tabs svg{width:14px;height:14px;opacity:.75}
+.tabs button.on svg{opacity:1}
+
+/* ================= layout ================= */
+.wrap{max-width:1560px;margin:0 auto;padding:18px 22px 26px;
+  display:flex;flex-direction:column;min-height:calc(100vh - 56px)}
+.cols{display:grid;grid-template-columns:minmax(0,1fr) 378px;gap:16px;align-items:start}
+.col{display:flex;flex-direction:column;gap:14px;min-width:0}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:11px;box-shadow:var(--sh)}
+.card-hd{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:11px 16px;border-bottom:1px solid var(--line2);
+}
+.card-hd h2{margin:0;font-size:13px;font-weight:620;letter-spacing:.15px}
+.card-bd{padding:17px 17px 18px}
+.tag{
+  font-size:10.5px;color:var(--mut);border:1px solid var(--line);border-radius:5px;
+  padding:1.5px 6px;background:#fbfcfd;white-space:nowrap;
+}
+
+/* ================= drop / chip ================= */
+.drop{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  padding:30px 16px;border:1.5px dashed #d4dae5;border-radius:9px;
+  background:#fbfcfe;cursor:pointer;transition:.14s;text-align:center;
+}
+.drop:hover,.drop.arm{border-color:var(--acc);background:var(--acc-bg)}
+.drop .di{width:27px;height:27px;opacity:.5}
+.drop b{font-size:13px;font-weight:600;color:var(--ink2)}
+.drop span{font-size:11.5px;color:var(--mut)}
+input[type=file]{display:none}
+
+.chip{
+  display:flex;align-items:center;gap:10px;padding:9px 12px;
+  border:1px solid var(--line);border-radius:9px;background:#fbfcfe;
+}
+.chip .ci{
+  width:28px;height:28px;flex:0 0 28px;border-radius:7px;background:var(--acc-bg);
+  display:flex;align-items:center;justify-content:center;color:var(--acc);
+}
+.chip .cn{min-width:0;flex:1 1 auto}
+.chip .cn b{display:block;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip .cn span{font-size:11px;color:var(--mut)}
+.xbtn{
+  border:1px solid var(--line);background:#fff;border-radius:6px;width:24px;height:24px;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--mut);
+  font-size:11px;flex:0 0 24px;
+}
+.xbtn:hover{background:#f2f5fa;color:var(--ink)}
+
+/* ================= buttons ================= */
+.steps{display:flex;gap:10px;margin-top:14px}
+.step{flex:1 1 0}
+.btn{
+  width:100%;display:flex;align-items:center;justify-content:center;gap:7px;
+  height:38px;padding:0 14px;border-radius:9px;border:1px solid transparent;
+  font-size:13px;font-weight:600;cursor:pointer;transition:.14s;
+}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn .n{
+  width:16px;height:16px;border-radius:50%;font-size:10.5px;font-weight:700;flex:0 0 16px;
+  display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.3);
+}
+.btn-p{background:var(--acc);color:#fff;box-shadow:0 1px 2px rgba(63,111,245,.28)}
+.btn-p:not(:disabled):hover{background:var(--acc-d)}
+.btn-p:disabled{background:#b9c8ee;box-shadow:none}
+.btn-s{background:#fff;color:var(--acc);border-color:#c6d5fb}
+.btn-s:not(:disabled):hover{background:var(--acc-bg)}
+.btn-s:disabled{background:#f7f8fb;color:#b3b9c6;border-color:var(--line)}
+.btn-g{background:#fff;color:var(--ink2);border-color:var(--line)}
+.btn-g:not(:disabled):hover{background:#f2f5fa}
+
+/* ================= progress / result ================= */
+.prog{display:none;margin-top:12px}
+.prog.on{display:block}
+.prog .pt{display:flex;justify-content:space-between;font-size:11.5px;color:var(--mut);margin-bottom:5px}
+.bar{height:4px;border-radius:99px;background:var(--line2);overflow:hidden}
+.barfill{height:100%;width:0;border-radius:99px;background:var(--acc);transition:width .18s}
+.bar.indet .barfill{width:35%!important;animation:ind 1.1s ease-in-out infinite}
+@keyframes ind{0%{margin-left:-35%}100%{margin-left:100%}}
+
+.res{display:none;margin-top:12px;border-radius:9px;padding:12px 14px;border:1px solid var(--line);background:#fbfcfe}
+.res.on{display:block}
+.res.ok{background:var(--ok-bg);border-color:#c4e7d5}
+.res.warn{background:var(--warn-bg);border-color:#f2ddb9}
+.res.err{background:var(--bad-bg);border-color:#f6cbc8}
+.res .rt{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:650}
+.res.ok .rt{color:var(--ok)} .res.warn .rt{color:var(--warn)} .res.err .rt{color:var(--bad)}
+.res .rd{font-size:12px;color:var(--ink2);margin-top:4px;line-height:1.6}
+.res ul{margin:6px 0 0;padding-left:15px;font-size:11.5px;color:var(--mut);line-height:1.65}
+.res .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.res .acts .btn{width:auto;min-width:120px;height:33px;padding:0 16px;font-size:12.5px}
+.ic{width:15px;height:15px;flex:0 0 15px}
+
+.hint{font-size:11.5px;color:var(--mut);margin:11px 0 0;line-height:1.6}
+
+/* ================= info rows ================= */
+.kv{display:flex;align-items:baseline;gap:12px;padding:3.5px 0;min-width:0}
+.kv>span{flex:0 0 74px;font-size:12px;color:var(--mut)}
+.kv>b{
+  flex:1 1 auto;min-width:0;font-size:12.5px;font-weight:550;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.kv+.kv{border-top:1px solid #f4f6f9}
+
+/* slot detail */
+.slx{border:1px solid var(--line2);border-radius:9px;padding:11px 13px;background:#fcfcfd}
+.slx+.slx{margin-top:8px}
+.slx.run{border-color:#c9d9ff;background:var(--acc-bg)}
+.slx-hd{display:flex;align-items:center;gap:7px;min-width:0}
+.dot{width:6px;height:6px;flex:0 0 6px;border-radius:50%;background:var(--mut2)}
+.slx.run .dot{background:var(--acc);box-shadow:0 0 0 3px rgba(63,111,245,.13)}
+.slx-hd .nm{font-size:12.5px;font-weight:650;flex:0 0 auto}
+.st2{font-size:10.5px;font-weight:600;padding:1px 6px;border-radius:4px;background:#eef0f4;color:var(--mut);flex:0 0 auto}
+.st2.ok{background:var(--ok-bg);color:var(--ok)}
+.st2.warn{background:var(--warn-bg);color:var(--warn)}
+.st2.bad{background:var(--bad-bg);color:var(--bad)}
+.slx-hd .rt2{margin-left:auto;font-size:10.5px;color:var(--acc);font-weight:600;flex:0 0 auto}
+.slx .md5{display:block;margin-top:5px;font-size:10.5px;color:var(--mut2);word-break:break-all;line-height:1.45}
+.slx .meta{display:flex;gap:12px;margin-top:4px;font-size:10.5px;color:var(--mut2);flex-wrap:wrap}
+.slx .meta b{font-weight:600;color:var(--mut)}
+
+/* uboot radios */
+.radios{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+.rad{
+  display:flex;align-items:flex-start;gap:9px;padding:9px 11px;border:1px solid var(--line);
+  border-radius:8px;cursor:pointer;background:#fbfcfe;transition:.12s;
+}
+.rad:hover{border-color:#ccd6e6}
+.rad.on{border-color:var(--acc);background:var(--acc-bg)}
+.rad input{margin:2px 0 0;accent-color:var(--acc)}
+.rad .rl b{display:block;font-size:12.5px;font-weight:600}
+.rad .rl span{font-size:11px;color:var(--mut)}
+
+pre.box{
+  margin:0;padding:12px;border:1px solid var(--line);border-radius:8px;background:#fbfcfe;
+  font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:11.5px;line-height:1.65;
+  color:var(--ink2);max-height:calc(100vh - 260px);overflow:auto;
+  white-space:pre-wrap;word-break:break-all;
+}
+.rows{display:flex;flex-direction:column;gap:10px}
+.row{display:flex;gap:12px;min-width:0}
+.row>b{flex:0 0 92px;font-size:12px;font-weight:600;color:var(--ink2)}
+.row>span{flex:1 1 auto;min-width:0;font-size:12px;color:var(--mut);line-height:1.65}
+
+.inlineact{display:flex;gap:8px;margin-top:12px}
+.inlineact .btn{width:auto;padding:0 16px;height:34px;font-size:12.5px}
+.page{display:none}
+.page.on{display:block}
+.foot{margin-top:auto;padding-top:18px;font-size:11px;color:var(--mut2);
+  display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+
+/* reboot overlay */
+.ovl{
+  position:fixed;inset:0;background:rgba(242,244,248,.93);backdrop-filter:blur(3px);
+  display:none;align-items:center;justify-content:center;z-index:50;
+}
+.ovl.on{display:flex}
+.ovl .ob{max-width:390px;text-align:center;padding:0 24px}
+.spin{
+  width:32px;height:32px;margin:0 auto 15px;border-radius:50%;
+  border:2.5px solid #d7e0f6;border-top-color:var(--acc);animation:sp .8s linear infinite;
+}
+@keyframes sp{to{transform:rotate(360deg)}}
+.ovl h3{margin:0 0 5px;font-size:15px;font-weight:650}
+.ovl p{margin:0;font-size:12.5px;color:var(--mut);line-height:1.7}
+
+@media(max-width:1080px){
+  .cols{grid-template-columns:minmax(0,1fr)}
+  .top{height:auto;padding:10px 14px;flex-wrap:wrap;gap:10px}
+  .tabs{margin-left:0;width:100%;overflow-x:auto}
+  .wrap{padding:14px}
+}
+
+/* ===== CYBER-MECHA · HC-3 ===== */
+:root{
+  --bg:#0a0f16;--card:#131b26;--line:#31465c;--line2:#22303f;
+  --ink:#f5faff;--ink2:#d2e2ef;--mut:#a8bed0;--mut2:#849db0;
+  --acc:#45ebff;--acc-d:#14c8e6;--acc-bg:#0e3745;
+  --ok:#4dffb0;--ok-bg:#0a3624;--warn:#ffd66b;--warn-bg:#3a2a08;--bad:#ff7080;--bad-bg:#3a1018;
+  --sh:0 0 0 1px #2a3d52,0 0 26px -12px rgba(69,235,255,.55);
+  --cut:11px;
+}
+body{
+  font-size:15px;line-height:1.66;color:var(--ink);letter-spacing:.1px;
+  background:
+    radial-gradient(1100px 500px at 86% -120px,rgba(69,235,255,.15),transparent 72%),
+    radial-gradient(820px 420px at 4% 114%,rgba(255,112,128,.09),transparent 72%),
+    var(--bg);
+}
+.top{background:rgba(10,15,22,.96);border-bottom:1px solid var(--line);
+  box-shadow:0 1px 0 #45ebff33}
+.top::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;
+  background:linear-gradient(90deg,transparent,#45ebff,#45ebff66,transparent)}
+.logo{background:linear-gradient(140deg,#45ebff,#0ab4d4);color:#04161d;
+  box-shadow:0 0 20px -2px #45ebffaa}
+.bt{letter-spacing:.7px;font-size:15px;font-weight:700;color:#fff}
+.bs{font-size:11.5px;color:var(--mut)}
+.pill{border:1px solid var(--line);background:#16222f;color:#c3d8e8;
+  letter-spacing:.4px;font-weight:600;font-size:11.5px}
+.pill.on{color:var(--ok);border-color:#1f7d55;box-shadow:0 0 14px -3px #4dffb0}
+.tabs button{color:#c3d8e8;font-weight:500;font-size:13.5px}
+.tabs button:hover{background:#182635;color:#fff}
+.tabs button.on{background:var(--acc-bg);color:var(--acc);font-weight:700;
+  box-shadow:inset 0 0 0 1px #45ebff66,0 0 20px -8px #45ebff}
+.card{position:relative;background:linear-gradient(180deg,#16202b,#121a24);
+  border-color:#31465c;box-shadow:var(--sh)}
+.card::before,.card::after{content:"";position:absolute;width:var(--cut);height:var(--cut);
+  border-color:#45ebffcc;border-style:solid;pointer-events:none}
+.card::before{top:-1px;left:-1px;border-width:2px 0 0 2px}
+.card::after{bottom:-1px;right:-1px;border-width:0 2px 2px 0}
+.card-hd{border-bottom:1px solid #2a3d52;
+  background:linear-gradient(90deg,#1a2836 0%,#16212d 55%,transparent 100%)}
+.card-hd h2{letter-spacing:1.2px;text-transform:uppercase;font-size:12.5px;
+  color:#45ebff;font-weight:700;text-shadow:0 0 14px #45ebff55}
+.tag{background:#182635;color:#b6cddd;font-weight:600;border-color:#38506a;font-size:11px}
+.kv{padding:6px 0}
+.kv>span{color:#a8bed0;font-size:13px;letter-spacing:.2px}
+.kv>b{color:#f5faff;font-size:13.5px;font-weight:600}
+.kv+.kv{border-top:1px solid #22303f}
+.drop{border-color:#3d5a76;background:#0f1720}
+.drop:hover,.drop.arm{border-color:var(--acc);background:var(--acc-bg);
+  box-shadow:inset 0 0 50px -18px #45ebff}
+.drop b{color:#eaf4fc;font-size:14px}
+.drop span{color:var(--mut);font-size:12.5px}
+.chip{background:#16222f;border-color:#31465c}
+.chip .ci{background:var(--acc-bg);color:var(--acc)}
+.chip .cn b{color:#f5faff;font-size:13.5px}
+.chip .cn span{color:var(--mut);font-size:12px}
+.xbtn{background:#16222f;border-color:#31465c;color:#c3d8e8;font-size:12px}
+.xbtn:hover{background:#20303f;color:#fff;border-color:var(--acc)}
+.btn{border-radius:3px;letter-spacing:.7px;text-transform:uppercase;font-size:12.5px}
+.btn-p{background:linear-gradient(180deg,#45ebff,#0caac9);color:#03161d;font-weight:700;
+  box-shadow:0 0 22px -5px #45ebff,inset 0 1px 0 #ffffff77}
+.btn-p:not(:disabled):hover{background:linear-gradient(180deg,#74f1ff,#13c2dd)}
+.btn-p:disabled{background:#1d3b4a;color:#8fb6c6;box-shadow:none}
+.btn-s{background:#112932;color:#7fe9f8;border-color:#2f6b7d;font-weight:700}
+.btn-s:not(:disabled){color:var(--acc)}
+.btn-s:not(:disabled):hover{background:var(--acc-bg);border-color:var(--acc);
+  box-shadow:0 0 16px -8px #45ebff}
+.btn-s:disabled{background:#111a24;color:#7d97a8;border-color:#2a3d52}
+.btn-g{background:#16222f;color:#d2e2ef;border-color:#38506a;font-weight:600}
+.btn-g:not(:disabled):hover{background:#20303f;color:#fff;border-color:#4a6a88}
+.bar{background:#0a121a;box-shadow:inset 0 0 0 1px #2a3d52}
+.barfill{background:linear-gradient(90deg,#14c8e6,#45ebff);box-shadow:0 0 16px -2px #45ebff}
+.prog .pt{color:#b6cddd;font-weight:500;font-size:12px}
+.res{background:#0f1720;border-color:#31465c}
+.res.ok{background:#0a3624;border-color:#249a68}
+.res.warn{background:#3a2a08;border-color:#8f6c1a}
+.res.err{background:#3a1018;border-color:#8f2836}
+.res .rt{font-size:13.5px;font-weight:700;letter-spacing:.3px}
+.res.ok .rt{color:var(--ok);text-shadow:0 0 18px #4dffb077}
+.res.warn .rt{color:var(--warn);text-shadow:0 0 18px #ffd66b77}
+.res.err .rt{color:var(--bad);text-shadow:0 0 18px #ff708077}
+.res .rd{color:#eaf4fc;font-size:13px}
+.res ul{color:#b6cddd;font-size:12.5px;line-height:1.75}
+.slx{background:#0f1720;border-color:#2a3d52}
+.slx.run{background:var(--acc-bg);border-color:#45ebffaa;
+  box-shadow:inset 0 0 38px -20px #45ebff,0 0 0 1px #45ebff55}
+.slx.run .dot{background:var(--acc);box-shadow:0 0 0 3px #45ebff2e,0 0 14px #45ebff}
+.slx-hd .nm{font-size:13.5px;color:#f5faff;letter-spacing:.3px}
+.slx-hd .rt2{color:var(--acc);font-size:11.5px;font-weight:700;letter-spacing:.3px}
+.slx .md5{color:#9db6c8;font-size:11.5px;letter-spacing:.2px}
+.slx .meta{color:#8fa8bb;font-size:11.5px}
+.slx .meta b{color:#b6cddd;font-weight:600}
+.st2{font-weight:700;letter-spacing:.3px;font-size:11.5px;padding:2px 7px}
+.st2.ok{background:#0d5340;color:#4dffb0}
+.st2.warn{background:#54400c;color:#ffd66b}
+.st2.bad{background:#541a24;color:#ff7080}
+.rad{background:#0f1720;border-color:#31465c}
+.rad:hover{border-color:#4a6a88}
+.rad.on{background:var(--acc-bg);border-color:var(--acc);
+  box-shadow:0 0 20px -8px #45ebff,inset 0 0 0 1px #45ebff44}
+.rad input{accent-color:#45ebff}
+.rad .rl b{color:#f5faff;font-size:13.5px}
+.rad .rl span{color:var(--mut);font-size:12px}
+pre.box{background:#080e15;border-color:#2a3d52;color:#a8e2f2;font-size:12.5px;line-height:1.75}
+.rows .row>b{color:#45ebff;font-size:13px;letter-spacing:.3px;font-weight:700}
+.rows .row>span{color:#d2e2ef;font-size:13px;line-height:1.75}
+.hint{color:#9db6c8;font-size:12.5px}
+.foot{color:#849db0;font-size:12px;letter-spacing:.4px}
+.ovl{background:rgba(8,12,18,.96)}
+.spin{border-color:#1e3f4e;border-top-color:var(--acc);
+  box-shadow:0 0 22px -6px #45ebff}
+.ovl h3{color:#f5faff} .ovl p{color:#b6cddd}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:#31465c;border-radius:0}
+::-webkit-scrollbar-thumb:hover{background:#4a6a88}
+::-webkit-scrollbar-track{background:#0a121a}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <div class="logo">TL</div>
+    <div><div class="bt">WTA301</div><div class="bs">U-Boot 恢复控制台</div></div>
+  </div>
+  <span class="pill" id="live">连接中…</span>
+
+  <nav class="tabs">
+    <button data-p="fw" class="on">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v11m0 0l-3.5-3.5M12 14l3.5-3.5M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+      固件升级
+    </button>
+    <button data-p="uboot">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
+      U-Boot
+    </button>
+    <button data-p="env">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      环境变量
+    </button>
+    <button data-p="sys">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v.01M11 12h1v4h1"/></svg>
+      系统信息
+    </button>
+  </nav>
+</header>
+
+<div class="wrap">
+
+  <!-- ================= 固件升级 ================= -->
+  <div class="page on" id="page-fw">
+    <div class="cols">
+      <div class="col">
+
+        <div class="card">
+          <div class="card-hd"><h2>选择固件</h2><span class="tag">最大 17 MB</span></div>
+          <div class="card-bd">
+            <div class="drop" id="drop">
+              <svg class="di" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V4m0 0L8 8m4-4l4 4"/><path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>
+              <b>点击选择，或把固件拖到这里</b>
+              <span>OpenWrt sysupgrade 包 · TP-Link 官方固件包</span>
+            </div>
+            <div class="chip" id="chip" style="display:none">
+              <span class="ci"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3v5h5M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/></svg></span>
+              <div class="cn"><b id="fname">—</b><span id="fsize">—</span></div>
+              <button class="xbtn" id="fclear" title="移除">✕</button>
+            </div>
+            <input type="file" id="file">
+
+            <div class="steps">
+              <div class="step"><button class="btn btn-p" id="bcheck" disabled><span class="n">1</span>上传并校验</button></div>
+              <div class="step"><button class="btn btn-s" id="bflash" disabled><span class="n">2</span>写入 Flash</button></div>
+            </div>
+
+            <div class="prog" id="prog">
+              <div class="pt"><span id="ptxt">正在上传…</span><span id="ppct"></span></div>
+              <div class="bar" id="bar"><div class="barfill" id="barfill"></div></div>
+            </div>
+
+            <div class="res" id="st"></div>
+
+            <p class="hint">两步走：先传到内存里校验（不动 flash），确认无误再写入。写入过程中请勿断电。</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-hd"><h2>写入位置</h2><span class="tag">B 槽保持不动</span></div>
+          <div class="card-bd">
+            <div class="rows">
+              <div class="row"><b>固件头</b><span class="mono">0x4800000 · 128 KB · 写入后重签 md5</span></div>
+              <div class="row"><b>kernel</b><span class="mono">0x4880000 · 4.5 MB</span></div>
+              <div class="row"><b>rootfs</b><span class="mono">0x4FC0000 · 12 MB</span></div>
+              <div class="row"><b>回退槽</b><span class="mono">0x880000 / 0xFC0000 保持原样，刷失败时是唯一退路</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-hd"><h2>常见问题</h2></div>
+          <div class="card-bd">
+            <div class="rows">
+              <div class="row"><b>进不来这页</b><span>拔电 → 按住 reset → 插电 → 一直按到红灯亮（约 40 秒）再松手。只按几秒没用，那时还在初始化内存和交换机。</span></div>
+              <div class="row"><b>校验失败</b><span>包格式不对。设备只认紧凑布局：固件头 + kernel + rootfs 首尾相接、不含空洞，最大 17 MB。稀疏包留给串口 TTL 刷写。</span></div>
+              <div class="row"><b>刷完不启动</b><span>设备会自动回落到这个页面，也可以在串口用 <span class="mono">tplcheck</span> 看两槽状态。</span></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="col">
+
+        <div class="card">
+          <div class="card-hd"><h2>设备状态</h2><span class="tag" id="stamp">—</span></div>
+          <div class="card-bd">
+            <div class="kv"><span>型号</span><b id="m-model">—</b></div>
+            <div class="kv"><span>内存</span><b id="m-ram">—</b></div>
+            <div class="kv"><span>闪存</span><b id="m-flash">—</b></div>
+            <div class="kv"><span>本机地址</span><b id="m-ip">—</b></div>
+            <div class="kv"><span>运行槽</span><b id="m-run">—</b></div>
+            <div class="kv"><span>固件槽</span><b id="m-fw">—</b></div>
+            <div class="kv"><span>U-Boot</span><b id="m-ver">—</b></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-hd"><h2>槽位</h2><span class="tag">u-boot 自身</span></div>
+          <div class="card-bd">
+            <div class="slx" id="sl1">
+              <div class="slx-hd"><i class="dot"></i><span class="nm">image_1</span>
+                <span class="st2" id="sl1st">—</span><span class="rt2" id="sl1rt"></span></div>
+              <span class="md5 mono" id="sl1md5">—</span>
+              <div class="meta"><span>头 <b class="mono">0x800000</b></span><span>槽 <b class="mono">0x700000</b></span></div>
+            </div>
+            <div class="slx" id="sl2">
+              <div class="slx-hd"><i class="dot"></i><span class="nm">image_2</span>
+                <span class="st2" id="sl2st">—</span><span class="rt2" id="sl2rt"></span></div>
+              <span class="md5 mono" id="sl2md5">—</span>
+              <div class="meta"><span>头 <b class="mono">0x4800000</b></span><span>槽 <b class="mono">0x4700000</b></span></div>
+            </div>
+            <div class="steps" style="margin-top:12px">
+              <div class="step"><button class="btn btn-g" id="brefresh">刷新状态</button></div>
+              <div class="step"><button class="btn btn-g" id="breboot">重启设备</button></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= U-Boot ================= -->
+  <div class="page" id="page-uboot">
+    <div class="cols">
+      <div class="col">
+        <div class="card">
+          <div class="card-hd"><h2>写入目标</h2><span class="tag">两槽各一份更安全</span></div>
+          <div class="card-bd">
+            <div class="radios" id="targets">
+              <label class="rad on"><input type="radio" name="tgt" value="0" checked>
+                <span class="rl"><b>两槽都写（推荐）</b><span>image_1 与 image_2 写入同一镜像，任一槽损坏仍能启动</span></span></label>
+              <label class="rad"><input type="radio" name="tgt" value="1">
+                <span class="rl"><b>只写 image_1</b><span>0x700000 槽 · 主槽，重启后立即生效</span></span></label>
+              <label class="rad"><input type="radio" name="tgt" value="2">
+                <span class="rl"><b>只写 image_2</b><span>0x4700000 槽 · 备份槽，主槽失效时才会用到</span></span></label>
+            </div>
+
+            <div class="drop" id="drop2">
+              <svg class="di" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V4m0 0L8 8m4-4l4 4"/><path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3"/></svg>
+              <b>点击选择，或把槽镜像拖到这里</b>
+              <span>必须是 262144 字节的 u-boot 槽镜像</span>
+            </div>
+            <div class="chip" id="chip2" style="display:none">
+              <span class="ci"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/></svg></span>
+              <div class="cn"><b id="fname2">—</b><span id="fsize2">—</span></div>
+              <button class="xbtn" id="fclear2" title="移除">✕</button>
+            </div>
+            <input type="file" id="file2">
+
+            <div class="steps">
+              <div class="step"><button class="btn btn-p" id="buboot" disabled><span class="n">1</span>上传并校验</button></div>
+              <div class="step"><button class="btn btn-s" id="bubootw" disabled><span class="n">2</span>写入 Flash</button></div>
+            </div>
+
+            <div class="prog" id="prog2">
+              <div class="pt"><span id="ptxt2">正在上传…</span><span id="ppct2"></span></div>
+              <div class="bar" id="bar2"><div class="barfill" id="barfill2"></div></div>
+            </div>
+
+            <div class="res" id="st2"></div>
+
+            <p class="hint">写错 u-boot 可能导致设备无法启动。两块槽都写坏只能拆机上 USB 或串口救砖。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="col">
+        <div class="card">
+          <div class="card-hd"><h2>当前槽位</h2><span class="tag">写入前先确认</span></div>
+          <div class="card-bd">
+            <div class="slx" id="u1">
+              <div class="slx-hd"><i class="dot"></i><span class="nm">image_1</span>
+                <span class="st2" id="u1st">—</span><span class="rt2" id="u1rt"></span></div>
+              <span class="md5 mono" id="u1md5">—</span>
+              <div class="meta"><span>头 <b class="mono">0x800000</b></span><span>槽 <b class="mono">0x700000</b></span></div>
+            </div>
+            <div class="slx" id="u2">
+              <div class="slx-hd"><i class="dot"></i><span class="nm">image_2</span>
+                <span class="st2" id="u2st">—</span><span class="rt2" id="u2rt"></span></div>
+              <span class="md5 mono" id="u2md5">—</span>
+              <div class="meta"><span>头 <b class="mono">0x4800000</b></span><span>槽 <b class="mono">0x4700000</b></span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-hd"><h2>镜像限制</h2></div>
+          <div class="card-bd">
+            <div class="rows">
+              <div class="row"><b>槽大小</b><span class="mono">262144 B（0x40000），压缩后必须放得下</span></div>
+              <div class="row"><b>压缩</b><span>LZMA，解压后上限 655360 B（0xA0000）</span></div>
+              <div class="row"><b>写入顺序</b><span>先写槽、后写头，任何时刻至少有一块槽完整</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-hd"><h2>风险</h2></div>
+          <div class="card-bd">
+            <div class="rows">
+              <div class="row"><b>两槽都坏</b><span>只能拆机上 USB 或接串口救砖，没有页面可用</span></div>
+              <div class="row"><b>只写一槽</b><span>另一槽若也是坏的，等于没有退路</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 环境变量 ================= -->
+  <div class="page" id="page-env">
+    <div class="cols">
+      <div class="col">
+        <div class="card">
+          <div class="card-hd"><h2>当前变量</h2><span class="tag" id="envtag">—</span></div>
+          <div class="card-bd">
+            <pre class="box" id="envpre">读取中…</pre>
+            <div class="inlineact"><button class="btn btn-g" id="benv">重新读取</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <div class="card-hd"><h2>存放位置</h2></div>
+          <div class="card-bd">
+            <div class="rows">
+              <div class="row"><b>分区</b><span class="mono">0:APPSBLENV（SMEM）</span></div>
+              <div class="row"><b>为何看不到</b><span>Linux 侧 DTS 没有对应 mtd 节点，<span class="mono">/proc/mtd</span> 里不会出现</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 系统信息 ================= -->
+  <div class="page" id="page-sys">
+    <div class="cols">
+      <div class="col">
+        <div class="card">
+          <div class="card-hd"><h2>/sysinfo</h2>
+            <span class="tag" id="systag">—</span></div>
+          <div class="card-bd">
+            <pre class="box" id="rawpre" style="max-height:330px">读取中…</pre>
+            <div class="inlineact"><button class="btn btn-g" id="bsys">重新读取</button></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-hd"><h2>排查顺序</h2><span class="tag">三段定位</span></div>
+          <div class="card-bd">
+            <div class="rows">
+              <div class="row"><b>1 · 看字段</b><span>右栏 JSON 里两槽的 <span class="mono">hdr_ok</span> / <span class="mono">md5_match</span> / <span class="mono">decode_ok</span> 是否都为 true。哪个 false，页面就显示对应的原因。</span></div>
+              <div class="row"><b>2 · 对串口</b><span>串口敲 <span class="mono">tplcheck</span>，结论必须与页面一致 —— 两者用的是同一份判定代码，不一致就说明有一次读取失败而非镜像坏。</span></div>
+              <div class="row"><b>3 · 读原因</b><span>串口里 <span class="mono">tplinkinfo:</span> 开头的行直接给出失败原因：内存不够 / LZMA 坏流 / 解出来不是 u-boot。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card">
+          <div class="card-hd"><h2>/sysinfo/tplink</h2><span class="tag">槽位判定</span></div>
+          <div class="card-bd">
+            <pre class="box" id="slotpre" style="max-height:620px">读取中…</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span>U-Boot failsafe</span><span>·</span><span class="mono" id="fver">—</span><span>·</span>
+    <a class="mono" href="/version">/version</a>
+  </div>
+</div>
+
+<div class="ovl" id="ovl">
+  <div class="ob">
+    <div class="spin"></div>
+    <h3 id="ovlt">设备正在重启…</h3>
+    <p id="ovlp">请把电脑网卡改回「自动获取 IP」，约 30 秒后用浏览器访问 <b>http://192.168.1.1</b></p>
+  </div>
+</div>
+
+<script>
+"use strict";
+var MB = 1024*1024;
+var PREVIEW = (location.protocol === "file:");
+function $(id){ return document.getElementById(id); }
+function fmt(n){
+  if(n === null || n === undefined) return "—";
+  if(n < 1024) return n + " B";
+  if(n < MB) return (n/1024).toFixed(1) + " KB";
+  return (n/MB).toFixed(1) + " MB";
+}
+
+/* ---------------- preview mocks (file:// only) ---------------- */
+var MOCK = {
+  "/sysinfo": {"uboot_version":"U-Boot 2016.01-9ce3157-dirty (2026-11-06 03:22:19 +0800)",
+    "board":{"model":"ipq5018-tplink-wta301","ram_size":268435456},
+    "devices":{"nand":{"present":true,"size":134217728}}},
+  "/network/info": {"ipaddr":"192.168.1.1","netmask":"255.255.255.0"},
+  "/sysinfo/tplink": {"status":"success",
+    "uboot_run":{"slot":"image_2","assumed":true},
+    "boot_flag":{"ok":true,"raw":2},
+    "slots":[
+      {"name":"image_1","active":false,"hdr_ok":true,"md5_match":true,"decode_ok":true,"md5":"c3a6a2c1db4147f43bca2ab541924f16"},
+      {"name":"image_2","active":true,"hdr_ok":true,"md5_match":true,"decode_ok":true,"md5":"c3a6a2c1db4147f43bca2ab541924f16"}],
+    "firmware_slot":{"name":"image_2","label":"A 槽 · kernel + rootfs"},
+    "uboot_target":0},
+  "/env/list": {"env":{"baudrate":"115200","bootdelay":"3","bootcmd":"bootipq",
+    "ethaddr":"98:97:cc:a8:1f:e7","ipaddr":"192.168.1.1","serverip":"192.168.1.100",
+    "bootargs":"console=ttyMSM0,115200n8 ubi.mtd=7"}}
+};
+function mockCall(path, file){
+  return new Promise(function(res){
+    setTimeout(function(){
+      if(path === "/upload"){
+        res({status:"success", info:{name:file?file.name:"firmware.bin",
+          size:file?file.size:17170432, type:"tplink", md5:"837a9a553886426ac8b184109bf1b913"}});
+      } else if(path === "/result"){ res({status:"success", info:{reboot:false}});
+      } else if(path === "/reboot"){ res({status:"success"});
+      } else if(MOCK[path]){ res(JSON.parse(JSON.stringify(MOCK[path]))); }
+      else { res({}); }
+    }, 220);
+  });
+}
+
+/* ---------------- transport ---------------- */
+/* ★ /result 与 /reboot 必须空 body 且不设 Content-Type：
+ *   net/httpd.c 解析 POST 时，头部有 Content-Type 却找不到 boundary 就直接 400。
+ *   浏览器给字符串 body 会自动加 text/plain，正好踩中。 */
+function post(path, body, onProgress){
+  if(PREVIEW) return mockCall(path, body && body.__file);
+  return new Promise(function(res, rej){
+    var x = new XMLHttpRequest();
+    x.open("POST", path, true);
+    x.timeout = 300000;
+    if(onProgress && x.upload) x.upload.onprogress = onProgress;
+    x.onload = function(){
+      var d = null;
+      try { d = JSON.parse(x.responseText); } catch(e){}
+      if(d) res(d);
+      else rej({raw:true, code:x.status, text:(x.responseText||"").slice(0,200)});
+    };
+    x.onerror = function(){ rej({net:true}); };
+    x.ontimeout = function(){ rej({timeout:true}); };
+    x.send(body === undefined ? null : body);
+  });
+}
+function get(path){
+  if(PREVIEW) return mockCall(path);
+  return new Promise(function(res, rej){
+    var x = new XMLHttpRequest();
+    x.open("GET", path, true);
+    x.timeout = 20000;
+    x.onload = function(){
+      try { res(JSON.parse(x.responseText)); }
+      catch(e){ rej({raw:true, text:(x.responseText||"").slice(0,200)}); }
+    };
+    x.onerror = function(){ rej({net:true}); };
+    x.ontimeout = function(){ rej({timeout:true}); };
+    x.send();
+  });
+}
+
+/* ---------------- helpers ---------------- */
+function setPill(cls, txt){
+  var el = $("live");
+  el.className = "pill " + (cls || "");
+  el.textContent = txt;
+}
+function esc(s){
+  return String(s === null || s === undefined ? "" : s).replace(/[&<>"]/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];
+  });
+}
+var ICON = {
+  ok:  '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>',
+  err: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16v.01"/></svg>',
+  warn:'<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3l9 16H3z"/><path d="M12 9v5M12 17v.01"/></svg>'
+};
+function show(elId, kind, title, desc, lines, actions){
+  var el = $(elId);
+  if(!kind){ el.className = "res"; el.innerHTML = ""; return; }
+  var h = '<div class="rt">' + (ICON[kind] || "") + "<span>" + esc(title) + "</span></div>";
+  if(desc) h += '<div class="rd">' + esc(desc) + "</div>";
+  if(lines && lines.length){
+    h += "<ul>";
+    for(var i = 0; i < lines.length; i++) h += "<li>" + esc(lines[i]) + "</li>";
+    h += "</ul>";
+  }
+  el.className = "res on " + kind;
+  el.innerHTML = h;
+  if(actions && actions.length){
+    var box = document.createElement("div");
+    box.className = "acts";
+    actions.forEach(function(a){
+      var b = document.createElement("button");
+      b.className = "btn " + (a.cls || "btn-g");
+      b.textContent = a.label;
+      b.onclick = function(){ a.fn(b); };
+      box.appendChild(b);
+    });
+    el.appendChild(box);
+  }
+}
+function describe(info){
+  var out = [];
+  if(!info) return out;
+  if(info.type)   out.push("类型：" + info.type);
+  if(info.size)   out.push("大小：" + info.size + " B");
+  if(info.md5)    out.push("MD5：" + info.md5);
+  if(info.reason) out.push("原因：" + info.reason);
+  return out;
+}
+function prog(pfx, pct, indet, txt){
+  var t = (pfx === "2");
+  $(t ? "prog2" : "prog").classList.add("on");
+  var bar = $(t ? "bar2" : "bar"), fill = $(t ? "barfill2" : "barfill");
+  bar.className = "bar" + (indet ? " indet" : "");
+  if(!indet){ fill.style.width = pct + "%"; $(t ? "ppct2" : "ppct").textContent = Math.round(pct) + "%"; }
+  else $(t ? "ppct2" : "ppct").textContent = "";
+  $(t ? "ptxt2" : "ptxt").textContent = txt || "";
+}
+function progOff(pfx){
+  var t = (pfx === "2");
+  $(t ? "prog2" : "prog").classList.remove("on");
+  $(t ? "barfill2" : "barfill").style.width = "0%";
+}
+
+/* ---------------- loads ---------------- */
+var info = { model:"—", ram:"—", flash:"—", ip:"—", run:"—", fw:"—", ver:"—" };
+function paintInfo(){
+  $("m-model").textContent = info.model; $("m-model").title = info.model;
+  $("m-ram").textContent   = info.ram;
+  $("m-flash").textContent = info.flash;
+  $("m-ip").textContent    = info.ip;
+  $("m-run").textContent   = info.run; $("m-run").title = info.run;
+  $("m-fw").textContent    = info.fw;  $("m-fw").title = info.fw;
+  $("m-ver").textContent   = info.ver; $("m-ver").title = info.ver;
+  $("fver").textContent    = info.ver;
+}
+function loadInfo(){
+  return get("/sysinfo").then(function(d){
+    var b = d.board || {}, dev = d.devices || {};
+    info.model = b.model || "—";
+    info.ram   = b.ram_size ? (b.ram_size/MB).toFixed(0) + " MB" : "—";
+    info.flash = (dev.nand && dev.nand.present && dev.nand.size)
+      ? (dev.nand.size/MB).toFixed(0) + " MB NAND" : "—";
+    var v = d.uboot_version || "—";
+    info.ver = v.replace(/^U-Boot\s*/, "");
+    $("rawpre").textContent = JSON.stringify(d, null, 1);
+    $("systag").textContent = "已读取";
+    $("stamp").textContent = "已同步";
+    paintInfo();
+    setPill("on", PREVIEW ? "预览模式" : "在线");
+  }).catch(function(){
+    setPill("bad", "离线");
+    $("rawpre").textContent = "读取失败：u-boot 没有响应 /sysinfo";
+  });
+}
+function loadNet(){
+  return get("/network/info").then(function(d){
+    info.ip = (d.ipaddr || "?") + (d.netmask ? " / " + d.netmask : "");
+    paintInfo();
+  }).catch(function(){ info.ip = "—"; paintInfo(); });
+}
+function paintSlot(idx, s, isRun){
+  var ok = s && s.hdr_ok && s.md5_match && s.decode_ok;
+  var label = ok ? "完好"
+    : (!s || !s.hdr_ok) ? "未签名"
+    : (!s.md5_match)   ? "md5 不符"
+    : (s.oom)          ? "内存不足"
+    : "解压失败";
+  var cls = "st2 " + (ok ? "ok" : (s && s.hdr_ok ? "warn" : "bad"));
+  var md5 = (s && s.md5) ? s.md5 : "—";
+  ["sl", "u"].forEach(function(pfx){
+    var el = $(pfx + idx); if(!el) return;
+    var st = $(pfx + idx + "st"), md = $(pfx + idx + "md5"), rt = $(pfx + idx + "rt");
+    if(st){ st.className = cls; st.textContent = label; }
+    if(md){ md.textContent = md5; md.title = md5; }
+    if(rt) rt.textContent = isRun ? "运行中" : "";
+    if(isRun) el.classList.add("run"); else el.classList.remove("run");
+  });
+}
+function loadSlots(){
+  return get("/sysinfo/tplink").then(function(d){
+    var run = (d.uboot_run && d.uboot_run.slot) || "";
+    paintSlot(1, d.slots && d.slots[0], run === "image_1");
+    paintSlot(2, d.slots && d.slots[1], run === "image_2");
+    info.run = run || "—";
+    var fw = d.firmware_slot;
+    info.fw = fw ? (fw.name + " · " + fw.label) : "—";
+    paintInfo();
+    $("slotpre").textContent = JSON.stringify(d, null, 1);
+  }).catch(function(){
+    $("sl1st").textContent = "读取失败";
+    $("sl2st").textContent = "读取失败";
+    $("slotpre").textContent = "读取失败：/sysinfo/tplink 无响应";
+  });
+}
+function loadEnv(){
+  state.envLoaded = true;
+  get("/env/list").then(function(d){
+    var o = d.env || d.vars || d, out = [];
+    if(o && typeof o === "object"){
+      var ks = Object.keys(o).sort();
+      for(var i = 0; i < ks.length; i++) out.push(ks[i] + " = " + o[ks[i]]);
+      $("envtag").textContent = ks.length + " 项";
+    }
+    $("envpre").textContent = out.length ? out.join("\n") : JSON.stringify(d, null, 1);
+  }).catch(function(){
+    $("envpre").textContent = "读取失败：u-boot 没有响应 /env/list";
+  });
+}
+
+/* ---------------- tabs ---------------- */
+Array.prototype.forEach.call(document.querySelectorAll(".tabs button"), function(b){
+  b.onclick = function(){
+    Array.prototype.forEach.call(document.querySelectorAll(".tabs button"), function(x){
+      x.classList.remove("on");
+    });
+    b.classList.add("on");
+    Array.prototype.forEach.call(document.querySelectorAll(".page"), function(p){
+      p.classList.remove("on");
+    });
+    $("page-" + b.getAttribute("data-p")).classList.add("on");
+    if(b.getAttribute("data-p") === "env" && !state.envLoaded) loadEnv();
+  };
+});
+
+/* ---------------- state ---------------- */
+var state = { file:null, ubootFile:null, validated:false, envLoaded:false,
+              target:0, done:false };
+
+/* ---------------- file pickers ---------------- */
+function wirePicker(cfg){
+  var input = $(cfg.input), drop = $(cfg.drop), chip = $(cfg.chip);
+  function take(f){
+    if(!f) return;
+    if(cfg.max && f.size > cfg.max){
+      show(cfg.status, "err", "文件过大",
+        f.name + " 有 " + fmt(f.size) + "，上限 " + fmt(cfg.max) + "。");
+      return;
+    }
+    cfg.onPick(f);
+    $(cfg.name).textContent = f.name;
+    $(cfg.size).textContent = fmt(f.size);
+    chip.style.display = "flex";
+    drop.style.display = "none";
+    show(cfg.status, null);
+    $(cfg.btn).disabled = false;
+    $(cfg.btn2).disabled = true;
+  }
+  input.addEventListener("change", function(){ if(input.files[0]) take(input.files[0]); });
+  drop.addEventListener("click", function(e){ if(e.target !== input) input.click(); });
+  ["dragenter","dragover"].forEach(function(ev){
+    drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.add("arm"); });
+  });
+  ["dragleave","drop"].forEach(function(ev){
+    drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.remove("arm"); });
+  });
+  drop.addEventListener("drop", function(e){
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if(f) take(f);
+  });
+  $(cfg.clear).onclick = function(){
+    cfg.onPick(null);
+    input.value = "";
+    chip.style.display = "none";
+    drop.style.display = "flex";
+    $(cfg.btn).disabled = true;
+    $(cfg.btn2).disabled = true;
+    show(cfg.status, null);
+    progOff(cfg.pfx);
+  };
+}
+wirePicker({input:"file", drop:"drop", chip:"chip", name:"fname", size:"fsize",
+  clear:"fclear", btn:"bcheck", btn2:"bflash", status:"st", pfx:"1", max:17*MB,
+  onPick:function(f){ state.file = f; state.validated = false; }});
+wirePicker({input:"file2", drop:"drop2", chip:"chip2", name:"fname2", size:"fsize2",
+  clear:"fclear2", btn:"buboot", btn2:"bubootw", status:"st2", pfx:"2", max:262144,
+  onPick:function(f){ state.ubootFile = f; }});
+
+Array.prototype.forEach.call(document.querySelectorAll("#targets .rad"), function(l){
+  l.addEventListener("click", function(){
+    Array.prototype.forEach.call(document.querySelectorAll("#targets .rad"), function(x){
+      x.classList.remove("on");
+    });
+    l.classList.add("on");
+    state.target = +l.querySelector("input").value;
+  });
+});
+
+/* ---------------- upload ---------------- */
+function doUpload(cfg){
+  var f = cfg.file;
+  if(!f) return;
+  var btn = $(cfg.btn);
+  btn.disabled = true;
+  var fd = new FormData();
+  fd.append(cfg.field, f, f.name);
+  if(cfg.extra) for(var k in cfg.extra) if(cfg.extra.hasOwnProperty(k)) fd.append(k, cfg.extra[k]);
+
+  show(cfg.status, null);
+  prog(cfg.pfx, 0, true, "正在上传… " + fmt(f.size));
+
+  var p = PREVIEW
+    ? mockCall("/upload", f)
+    : post("/upload", fd, function(e){
+        if(e.lengthComputable) prog(cfg.pfx, e.loaded/e.total*100, false,
+          "正在上传… " + fmt(e.loaded) + " / " + fmt(e.total));
+      });
+
+  p.then(function(d){
+    progOff(cfg.pfx);
+    if(d.status === "success"){
+      cfg.onOk(d);
+      $(cfg.btn2).disabled = false;
+      show(cfg.status, "ok", "校验通过",
+        (d.info && d.info.name ? d.info.name : "") +
+        (d.info && d.info.size ? "  ·  " + fmt(d.info.size) : ""),
+        describe(d.info).slice(0, 3),
+        [{label:"继续写入 Flash", cls:"btn-p", fn:function(){ $(cfg.btn2).click(); }}]);
+    } else {
+      btn.disabled = false;
+      show(cfg.status, "err", "校验失败", "文件被设备拒绝，flash 没有任何改动。", describe(d.info));
+    }
+  }).catch(function(e){
+    progOff(cfg.pfx);
+    btn.disabled = false;
+    if(e && e.raw){
+      show(cfg.status, "err", "响应无法解析", "HTTP " + e.code + (e.text ? "  ·  " + e.text : ""),
+        ["这通常说明请求被 u-boot 的 httpd 直接拒绝了。", "设备仍在 u-boot 里，flash 没有被写。"]);
+    } else if(e && e.timeout){
+      show(cfg.status, "err", "超时", "传输超过 180 秒仍未完成，请重试。");
+    } else {
+      show(cfg.status, "err", "连接中断", "上传过程中网络断开，设备可能已停止响应。");
+    }
+  });
+}
+$("bcheck").onclick = function(){
+  doUpload({field:"firmware", file:state.file, btn:"bcheck", btn2:"bflash",
+    status:"st", pfx:"1", onOk:function(){ state.validated = true; }});
+};
+$("buboot").onclick = function(){
+  doUpload({field:"uboot", file:state.ubootFile, btn:"buboot", btn2:"bubootw",
+    status:"st2", pfx:"2", extra:{slot:"" + state.target}, onOk:function(){} });
+};
+
+/* ---------------- flash ---------------- */
+function doFlash(cfg){
+  var btn = $(cfg.btn2);
+  btn.disabled = true;
+  $(cfg.btn).disabled = true;
+  show(cfg.status, null);
+  prog(cfg.pfx, 0, true, "正在写入 Flash，请勿断电…");
+
+  post("/result", undefined).then(function(d){
+    progOff(cfg.pfx);
+    if(d.status === "success"){
+      state.done = true;
+      setPill("warn", "待重启");
+      show(cfg.status, "ok", "写入完成", cfg.okDesc, cfg.okLines,
+        [{label:"立即重启", cls:"btn-p", fn:doReboot},
+         {label:"稍后重启", cls:"btn-g", fn:function(){ show(cfg.status, null); }}]);
+      btn.innerHTML = '<span class="n">✓</span>已写入';
+      btn.disabled = true;
+    } else {
+      show(cfg.status, "err", "写入失败",
+        (d.info && d.info.type ? "设备拒绝了这个镜像：" + d.info.type : "设备返回失败。"),
+        describe(d.info).length ? describe(d.info) : ["串口会打出具体原因。"]);
+      btn.disabled = false;
+      $(cfg.btn).disabled = false;
+    }
+  }).catch(function(e){
+    progOff(cfg.pfx);
+    if(e && e.raw){
+      show(cfg.status, "err", "写入失败（服务端未返回 JSON）",
+        "HTTP " + e.code + (e.text ? "  ·  " + e.text : "  ·  空响应"),
+        ["这说明请求被 u-boot 的 httpd 直接拒了，板子仍在 u-boot，flash 没有被写。"]);
+    } else if(e && e.timeout){
+      show(cfg.status, "warn", "超时", "写入可能仍在进行，请等 30 秒后刷新页面确认。");
+    } else {
+      show(cfg.status, "err", "连接中断", "写入过程中连接断开，设备可能正在重启或已出错。");
+    }
+    btn.disabled = false;
+    $(cfg.btn).disabled = false;
+  });
+}
+$("bflash").onclick = function(){
+  doFlash({btn:"bcheck", btn2:"bflash", status:"st", pfx:"1",
+    okDesc:"image_2 槽已更新，固件头已重新签名。重启后从新固件启动。",
+    okLines:["重启后把电脑网卡改回「自动获取 IP」",
+             "若新固件无法启动，设备会自动回到这个页面"]});
+};
+$("bubootw").onclick = function(){
+  doFlash({btn:"buboot", btn2:"bubootw", status:"st2", pfx:"2",
+    okDesc:"U-Boot 已写入所选槽，重启后生效。",
+    okLines:["两块槽都有副本时，任一槽损坏仍能启动"]});
+};
+
+/* ---------------- reboot ---------------- */
+var ovlTimer = null;
+function doReboot(){
+  $("ovl").classList.add("on");
+  $("ovlt").textContent = "设备正在重启…";
+  var left = 30;
+  clearInterval(ovlTimer);
+  function paint(){
+    $("ovlp").innerHTML = "请把电脑网卡改回「自动获取 IP」，<b>" +
+      (left > 0 ? left + "</b> 秒后访问" : "然后访问") + " <b>http://192.168.1.1</b>";
+  }
+  paint();
+  ovlTimer = setInterval(function(){
+    left--;
+    if(left <= 0){
+      clearInterval(ovlTimer);
+      $("ovlt").textContent = "如果还没恢复";
+      $("ovlp").innerHTML = "拔掉电源，按住 reset 键再插电，一直按到红灯亮（约 40 秒）后松手，" +
+        "重新打开 <b>http://192.168.1.1</b>";
+      return;
+    }
+    paint();
+  }, 1000);
+  if(PREVIEW){ setTimeout(function(){ $("ovl").classList.remove("on"); }, 2600); return; }
+  post("/reboot", undefined).catch(function(){});
+}
+$("breboot").onclick = function(){
+  show("st", "warn", "确认重启？", "设备会立即复位。若正在写入 flash，可能损坏固件。", [],
+    [{label:"确认重启", cls:"btn-p", fn:doReboot},
+     {label:"取消", cls:"btn-g", fn:function(){ show("st", null); }}]);
+};
+$("brefresh").onclick = function(){
+  setPill("", "刷新中…");
+  loadInfo(); loadNet(); loadSlots();
+};
+$("benv").onclick = function(){ state.envLoaded = false; $("envpre").textContent = "读取中…"; loadEnv(); };
+$("bsys").onclick = function(){ $("rawpre").textContent = "读取中…"; loadInfo(); loadNet(); loadSlots(); };
+
+/* ---------------- boot ---------------- */
+loadInfo(); loadNet(); loadSlots();
+if(PREVIEW){
+  $("fname").textContent = "op_wta301_firmware_web.bin";
+  $("fsize").textContent = fmt(17170432);
+  $("chip").style.display = "flex";
+  $("drop").style.display = "none";
+  state.file = {name:"op_wta301_firmware_web.bin", size:17170432};
+  $("bcheck").disabled = false;
+}
+</script>
+</body>
+</html>

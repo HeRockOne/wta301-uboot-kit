@@ -1,0 +1,23 @@
+# u-boot 编译输出（从不入库：体积大、可重建、且含本机工具链路径）
+/out/
+*.o
+*.a
+*.bin
+*.dtb
+*.dtb.comb.o
+*.dtb.comb.S
+dtb_combined.bin
+dtbtable.S
+u-boot
+u-boot.map
+u-boot.srec
+System.map
+.config
+.boards.d
+*.log
+
+# 编辑器 / 系统杂项
+*.swp
+*~
+.DS_Store
+Thumbs.db
