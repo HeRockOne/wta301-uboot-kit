@@ -38,6 +38,7 @@ fi
 TOOLCHAIN_BIN=${TOOLCHAIN_BIN:-}
 if [ -z "$TOOLCHAIN_BIN" ]; then
 	for c in "$KITROOT/../src/staging_dir/toolchain-arm_cortex-a7_gcc-5.2.0_musl-1.1.16_eabi/bin" \
+	         "$KITROOT/../../../src/staging_dir/toolchain-arm_cortex-a7_gcc-5.2.0_musl-1.1.16_eabi/bin" \
 	         "$UBOOT_TREE/../staging_dir/toolchain-arm_cortex-a7_gcc-5.2.0_musl-1.1.16_eabi/bin"; do
 		[ -x "$c/arm-openwrt-linux-muslgnueabi-gcc" ] && { TOOLCHAIN_BIN=$(cd "$c" && pwd); break; }
 	done
