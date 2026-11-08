@@ -91,7 +91,9 @@ wta301-uboot-kit/
 ├── files/              ★ 当前有效代码（23 个文件，按 u-boot 树内相对路径）
 ├── docs/
 │   ├── images/failsafe-console.png   网页恢复控制台截图（预览模式）
-│   └── SLOT-SWITCH.md     ★ 网页一键切 A/B 槽（`POST /bootflag`），不再依赖用户态脚本
+│   ├── SLOT-SWITCH.md     ★ 网页一键切 A/B 槽（`POST /bootflag`），不再依赖用户态脚本
+│   ├── DUAL-FLASH.md      ★ 网页刷写 A/B 双系统（P23），完整流程 + 三种包的区别
+│   └── SLOT-LAYOUT.md     ★ A/B 槽分区地址核实表（代码常量 vs 出厂 TP 头逐项对照）
 ├── build/              构建脚本
 │   ├── build_board.sh     官方流程（make defconfig → 清 DTB → make -j6）
 │   ├── build_j1.sh        ★ 推荐入口（-j1 串行，见 §4 的坑，跑完自动出槽镜像）
@@ -166,21 +168,31 @@ python build/mk_uboot_slot.py u-boot.bin <输出目录>
 | 槽内 LZMA 解压后 | 逐字节等于 `u-boot.bin` |
 | 板上 `tplcheck` | 两槽 `OK (md5 matches, decodes to 0x87c00)` |
 
-### 验收判据（P22 —— 网页切槽版）
+### 验收判据（P23 —— 网页切槽 + 网页刷双系统）
 
 | 项 | 期望 |
 |---|---|
-| `u-boot.bin` | **560,200 B**(0x88c48) |
-| `u-boot.bin` md5 | `b16152e5eda7e85265f5dfaeff634528` |
+| `u-boot.bin` | **562,824 B**(0x89688) |
+| `u-boot.bin` md5 | `d77e7291f5ef42aab115831a86b4ea71` |
 | 槽镜像 | 262,144 B |
-| 槽 md5 | **`0cf778c20152f37f3ad306d1c0dbe6d0`** |
-| 槽 crc32 | **`0x675D0AF2`** |
-| 槽内 LZMA 有效载荷 | 229,412 B（0x38024），余量 32,732 B = **12.5%** |
-| 一级解压余量 | 655,360 − 560,200 = 95,160 B (14.5%) |
+| 槽 md5 | **`ee84205210ef1f2e56a358e1dc3e596f`** |
+| 槽 crc32 | **`0x0FFCC293`** |
+| 槽内 LZMA 有效载荷 | 230,896 B（0x385F0），余量 31,248 B = **11.9%** |
+| 一级解压余量 | 655,360 − 562,824 = 92,536 B (14.1%) |
 | `mk_uboot_slot.py` 往返 | 解压后与 `u-boot.bin` 逐字节一致 |
-| 板上 `tplcheck` | ⬜ **未上板**（本版还没刷进板子） |
+| 板上 `tplcheck` | ⬜ **未上板** |
 
-> **先撞的仍是「解压后 655,360 B」这条**（余量 95,160 B），不是槽大小。
+<details><summary>历史判据（P21c / P22）</summary>
+
+| 版本 | u-boot.bin | 槽 md5 | 槽 crc32 |
+|---|---|---|---|
+| P21c | 556,032 B / `3a4cb00e…` | `d0ada9f76e4f1aba9b96a559a5220cee` | `0xCB2D3108` |
+| P22 | 560,200 B / `b16152e5…` | `0cf778c20152f37f3ad306d1c0dbe6d0` | `0x675D0AF2` |
+
+</details>
+
+> **先撞的仍是「解压后 655,360 B」这条**（余量 92,536 B），不是槽大小 ——
+> 槽里还有 31 KB 富余，但解压缓冲只剩 92 KB。
 > 再往 `index.html` / `tplinkinfo.c` 里加东西时看这条。
 
 ### 验证边界（哪一步实测过、哪一步没有）
@@ -329,3 +341,65 @@ POST /bootflag        Content-Type: multipart/form-data        slot=1 | slot=2
 浏览器直接开 `files/failsafe/fsdata/index.html`（`file://`）→ 页面进预览模式
 （左下角「预览模式」）→ 点切槽按钮 → 提示成功 → 刷新，「当前」跟着变。
 `/bootflag` 的 mock 会真的改掉 mock 里的 `boot_flag`，所以前后一致。
+
+---
+
+## 8. 网页刷写 A/B 双系统（P23）
+
+> 细节见 **`docs/DUAL-FLASH.md`**；地址核实见 **`docs/SLOT-LAYOUT.md`**。
+
+P22 让网页能**切**槽，P23 让网页能**刷**槽。两个加起来，双系统从装到切全在
+`http://192.168.1.1/` 里完成，不用串口、不用进系统。
+
+### 8.1 改了什么
+
+以前只能刷 A 槽，是**三段写死**（不是硬件限制）：
+
+| 位置 | 原来 | 现在 |
+|---|---|---|
+| 几何白名单 | 只认 A 槽那 4 个地址 | 认 A **或** B 两套（逐项比对 6 个字段） |
+| `tpimg_write()` | 三处 `nand erase/write` 地址是常量 | 取自 `tpimg_slots[]` 表，写入前再复核一次 |
+| 结尾日志 | 写死 `A slot written` | 打印实际槽名 |
+
+另外 `+0x90` 从「沿用现行头」改成**现场读目标槽 u-boot 算 md5** ——
+跨槽写入时沿用会把目标槽签成错的摘要。同时检查目标槽不是空白（全 `0xFF` 拒写）。
+
+### 8.2 界面
+
+「固件升级」页 → 选完文件后多一排：
+
+```
+○ 按固件声明的槽      ← 默认，旧行为完全不变
+○ 强制写 B 槽（image_1）
+○ 强制写 A 槽（image_2）
+```
+
+### 8.3 完整流程
+
+```
+① U-Boot 页：写 P22/P23 到两槽      ← 前提，没 /bootflag 就没法切
+② 固件页：stockv3-slotB-webupload.bin → 强制写 B 槽
+③ 固件页：op-p33-slotA-webupload.bin  → 强制写 A 槽
+④ 「启动槽」卡片：点 A 或 B → 重启
+```
+
+### 8.4 ⚠️ 三种包，别选错
+
+| 文件 | magic | 网页能不能吃 |
+|---|---|---|
+| `wta301-*-slotB.bin` / `*.img` | ASCII `WTA301V2` | ❌ 我们自造的容器 |
+| `*-webupload.bin` / `wta301-op-*-web.bin` | `00000100 55aa9dd1` | ✅ |
+
+转换工具 `wta301-2512/work/stock-mod/mk_tpimg_pack.py`。
+
+### 8.5 安全边界
+
+- 写残一级 `factory_boot`：**不可能**，地址只来自表里 8 个数字
+- 改装包指定任意偏移：**不可能**，几何必须匹配 A 或 B 全套六项
+- 目标槽 u-boot 空白：拒写（`target_uboot_blank`）
+- 刷一半断电：头最后写 ⇒ 该槽判坏 ⇒ 一级落另一槽
+
+### 8.6 未验证
+
+⬜ **P23 未上板**。跨槽写入的真实 `nand erase/write` 序列没在板子上跑过。
+离线能验的都验了：几何白名单、包自洽（`+0xa0`）、A/B 地址与出厂头 6/6 一致。

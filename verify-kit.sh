@@ -193,14 +193,14 @@ else
 	bad "$H 的 CONFIG_SYS_TEXT_BASE 不是 0x49900000 —— 这会让 TTL 直接死"
 fi
 
-# 槽大小余量：一级解压上限 0xA0000=655360 B，交付 P22 560200 B → 余量 95160 B
-# （P21c 为 556032 B / 余量 99328 B，历史值）。
+# 槽大小余量：一级解压上限 0xA0000=655360 B，交付 P23 562824 B → 余量 92536 B
+# （P21c 556032 / P22 560200，历史值）。
 # ⚠️ 这两个常量定义在 tplink_tpimg.h，不在 ipq5018.h。
 TH=files/include/failsafe/tplink_tpimg.h
 SLOT_CAP=$(grep -oE 'define TPIMG_UBOOT_DEC_CAP\s+0x[0-9a-fA-F]+' "$TH" | head -1 | grep -oE '0x[0-9a-fA-F]+')
 if [ -n "$SLOT_CAP" ]; then
-	ok "TPIMG_UBOOT_DEC_CAP = $SLOT_CAP（交付 560200 B 应在内）"
-	[ $((SLOT_CAP)) -ge 560200 ] || bad "解压上限 $SLOT_CAP < 交付镜像 560200 B"
+	ok "TPIMG_UBOOT_DEC_CAP = $SLOT_CAP（交付 562824 B 应在内）"
+	[ $((SLOT_CAP)) -ge 562824 ] || bad "解压上限 $SLOT_CAP < 交付镜像 562824 B"
 else
 	bad "$TH 里没找到 TPIMG_UBOOT_DEC_CAP（一级解压上限，扣错了会刷成砖）"
 fi
@@ -264,10 +264,10 @@ else
 fi
 
 # 唯一的成功判据（README §3 验收判据）必须与实测值一致
-grep -q 'b16152e5eda7e85265f5dfaeff634528' README.md \
-	&& ok "README 记录 u-boot.bin 期望 md5 b16152e5…" || warn "README 缺 u-boot.bin 期望 md5"
-grep -q '0cf778c2' README.md \
-	&& ok "README 记录槽镜像 md5 0cf778c2…" || warn "README 缺槽镜像 md5"
+grep -q 'd77e7291f5ef42aab115831a86b4ea71' README.md \
+	&& ok "README 记录 u-boot.bin 期望 md5 d77e7291…" || warn "README 缺 u-boot.bin 期望 md5"
+grep -q 'ee842052' README.md \
+	&& ok "README 记录槽镜像 md5 ee842052…" || warn "README 缺槽镜像 md5"
 
 # 历史快照必须明确标注不可直接用（否则有人会 copy 错文件）
 sed -n '/^## 5\./,/^## 6\./p' README.md | grep -q '不要直接用' \
@@ -287,11 +287,11 @@ if [ -z "$UB" ]; then
 	warn "未找到 u-boot.bin（正常：源码树不进仓库），槽镜像重出现已跳过"
 else
 	sz=$(stat -c%s "$UB" 2>/dev/null || :)
-	[ "$sz" = "560200" ] \
-		&& ok "u-boot.bin 尺寸 560200 B" \
-		|| bad "u-boot.bin 尺寸 $sz（应 560200）"
+	[ "$sz" = "562824" ] \
+		&& ok "u-boot.bin 尺寸 562824 B" \
+		|| bad "u-boot.bin 尺寸 $sz（应 562824）"
 	m=$(md5sum "$UB" 2>/dev/null | cut -d' ' -f1)
-	[ "$m" = "b16152e5eda7e85265f5dfaeff634528" ] \
+	[ "$m" = "d77e7291f5ef42aab115831a86b4ea71" ] \
 		&& ok "u-boot.bin md5 与 §3 判据一致" \
 		|| warn "u-boot.bin md5 $m（与发布版不同 —— 若你刚重编过属正常）"
 	# 真重出一遍槽镜像
@@ -303,9 +303,9 @@ else
 			sm=$(md5sum "$SLOT" | cut -d' ' -f1)
 			[ "$ssz" = "262144" ] \
 				&& ok "槽镜像 262144 B" || bad "槽镜像 $ssz B（应 262144）"
-			[ "$sm" = "0cf778c20152f37f3ad306d1c0dbe6d0" ] \
-				&& ok "槽镜像 md5 = 0cf778c2…（P22 交付值）" \
-				|| warn "槽镜像 md5 $sm（期望 0cf778c2…）"
+			[ "$sm" = "ee84205210ef1f2e56a358e1dc3e596f" ] \
+				&& ok "槽镜像 md5 = ee842052…（P23 交付值）" \
+				|| warn "槽镜像 md5 $sm（期望 ee842052…）"
 		else
 			bad "mk_uboot_slot.py 没产出 .bin"
 		fi

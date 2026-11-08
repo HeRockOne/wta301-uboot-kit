@@ -43,6 +43,23 @@
 目的：以前切 A/B 槽只能进系统跑 `wta301-slot`，系统起不来就没有入口；
 现在 u-boot 自己的网页恢复页就能切。详见 `docs/SLOT-SWITCH.md`。
 
+### 2.2 P23（网页刷写 A/B 双系统）
+
+| 文件 | 改动 |
+|---|---|
+| `include/failsafe/tplink_tpimg.h` | 新增 B 槽几何常量 `WTA301_B_*`；`struct tpimg_info` 加 `target_slot`；声明 `tpimg_slot_by_id()` / `tpimg_slot_by_kernel()` / `tpimg_apply_target()`；`TPIMG_FW_TARGET_*` |
+| `board/qca/arm/common/tplink_tpimg.c` | 几何白名单从「只认 A」改成「认 A 或 B」（`tpimg_match_geometry()`）；`tpimg_slots[]` 成为唯一地址来源；`tpimg_write()` 改用 `info->*_off`；`tpimg_build_header()` 按目标槽读头、重写 6 个几何字段、**现场读 flash 重签 `+0x90`**、拒写空白 u-boot 槽 |
+| `failsafe/modules/upgrade.c` | `/upload` 阶段为 **firmware** 也读 `slot` 字段（原来只有 u-boot 读） |
+| `failsafe/fsdata/index.html` | 固件页新增「写到哪个槽」三选一 + `paintFwHint()` 预警 |
+
+编译期断言锁死两槽 kernel 窗口等宽：
+
+```c
+#if WTA301_B_KERNEL_MAX != WTA301_KERNEL_MAX
+#error "B slot kernel window != A slot kernel window"
+#endif
+```
+
 顺带把 `build/build_j1.sh` 的 `python` 改成 `python3`（Ubuntu 24.04 无 `python`），
 并加 `UBOOT_SKIP_GITDIRTY=1`（巨型仓库下 `git status` 会拖 90 秒以上）。
 

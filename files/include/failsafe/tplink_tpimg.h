@@ -66,6 +66,31 @@ extern const u8 tpimg_magic[8];
 #define WTA301_VERIFY_MIN       0x00B00000u
 #define WTA301_VERIFY_MAX       WTA301_ROOTFS_SLOT
 
+/* ---- WTA301 B 槽几何（image_1，物理 0x0700000 起） ----
+ *
+ * 与 A 槽**内部布局完全相同**，只是整体平移 -0x4000000：
+ *
+ *      uboot → tphdr   +0x00100000
+ *      tphdr → kernel  +0x00080000
+ *      kernel → rootfs +0x00740000
+ *
+ * 所以 kernel 窗口宽度（0x740000）、rootfs 槽大小（0xC00000）、
+ * 参与校验的 rootfs 长度（0xB00000）四条约束两槽一模一样，不必分别定义。
+ * 实测依据：/proc/mtd 的 normal_boot_bak / firmware_bak / kernel_bak /
+ * rootfs_bak 四段起止，与 work/backup/flash_full_128M.bin 交叉核对过。
+ */
+#define WTA301_B_UBOOT_OFF      0x00700000u
+#define WTA301_B_UBOOT_LEN      0x00040000u
+#define WTA301_B_TPHDR_OFF      0x00800000u
+#define WTA301_B_TPHDR_LEN      0x00020000u
+#define WTA301_B_KERNEL_OFF     0x00880000u
+#define WTA301_B_ROOTFS_OFF     0x00FC0000u
+#define WTA301_B_KERNEL_MAX     (WTA301_B_ROOTFS_OFF - WTA301_B_KERNEL_OFF)
+/* 编译期自检：两条窗口宽度必须相等，不等就说明常量抄错了 */
+#if WTA301_B_KERNEL_MAX != WTA301_KERNEL_MAX
+#error "B slot kernel window != A slot kernel window: check WTA301_B_* constants"
+#endif
+
 /* 一块 flash 上能出现的镜像总长上限（头 + 内核区 + rootfs 槽） */
 #define WTA301_IMAGE_MAX        (TPIMG_HDR_LEN + WTA301_KERNEL_MAX + WTA301_ROOTFS_SLOT)
 
@@ -79,6 +104,7 @@ struct tpimg_info {
 	ulong rootfs_write_len;  /* 实际写入长度（对齐到擦除块） */
 	const u8 *kernel;
 	const u8 *rootfs;
+	int target_slot;         /* 1 = image_1(B 槽) / 2 = image_2(A 槽) */
 };
 
 /* ==================== 槽几何表 ====================
@@ -100,6 +126,14 @@ const struct tpimg_slot_geo *tpimg_slot_by_id(int id);
 
 /* 按 kernel 偏移反查是哪个槽（旧包兼容用：包自己声明了写到哪）。 */
 const struct tpimg_slot_geo *tpimg_slot_by_kernel(u32 kernel_off);
+
+/* 把 info 的四个几何字段改写成「目标槽」的值，并置 info->target_slot。
+ *
+ * 只有在 info 的几何已经通过白名单（A 或 B）之后才能调；任何别的值都不接受。
+ * 这是「同一个包能写进任意一槽」的唯一实现点 —— 包内容与槽无关，
+ * 只有写到哪、头怎么重签跟着槽走。
+ */
+int tpimg_apply_target(struct tpimg_info *info, int slot);
 
 /* firmware 页的「写入目标」：
  *   TPIMG_FW_TARGET_AS_IS   按包里 kernel/rootfs 声明的槽（旧行为，A 槽）

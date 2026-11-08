@@ -127,19 +127,33 @@ static void upload_handler(enum httpd_uri_handler_status status,
 		upload_data = form_value->data;
 		upload_size = form_value->size;
 
-		/* u-boot 页的「写入目标」三选一：0=两槽 1=image_1 2=image_2。
+		/* u-boot 页与固件页都有「写入目标」：
+		 *   u-boot 页：0=两槽 1=image_1 2=image_2
+		 *   固件页：  0=按包声明 1=强制 image_1(B) 2=强制 image_2(A)
 		 * 在 /upload 阶段就记下来（这里是真正解析过 multipart 的地方），
-		 * /result 阶段直接用 tpimg_uboot_target，不再依赖 body 解析。 */
-		if (upgrade_type == WEBFAILSAFE_UPGRADE_TYPE_UBOOT) {
+		 * /result 阶段直接用那两个全局变量，不再依赖 body 解析。 */
+		if (upgrade_type == WEBFAILSAFE_UPGRADE_TYPE_UBOOT ||
+		    upgrade_type == WEBFAILSAFE_UPGRADE_TYPE_FIRMWARE) {
 			struct httpd_form_value *slot =
 				httpd_request_find_value(request, "slot");
+			int want = 0;
 
-			tpimg_uboot_target = TPIMG_UBOOT_TARGET_BOTH;
-			if (slot && slot->data && slot->size == 1 &&
-			    (slot->data[0] == '1' || slot->data[0] == '2'))
-				tpimg_uboot_target = slot->data[0] - '0';
-			printf("upgrade: u-boot target slot = %d\n",
-			       tpimg_uboot_target);
+			if (slot && slot->data && slot->size >= 1 &&
+			    (slot->data[0] >= '0' && slot->data[0] <= '2'))
+				want = slot->data[0] - '0';
+
+			if (upgrade_type == WEBFAILSAFE_UPGRADE_TYPE_UBOOT) {
+				/* u-boot 页的 0 就是「两槽」，不是 AS_IS */
+				tpimg_uboot_target = (want == 1 || want == 2) ?
+					want : TPIMG_UBOOT_TARGET_BOTH;
+				printf("upgrade: u-boot target slot = %d\n",
+				       tpimg_uboot_target);
+			} else {
+				tpimg_firmware_target = want;
+				printf("upgrade: firmware target slot = %d"
+				       " (0=as declared, 1=image_1/B, 2=image_2/A)\n",
+				       tpimg_firmware_target);
+			}
 		}
 
 		httpd_debug("upload_data = 0x%lx, upload_size = %lu (0x%lx)\n",

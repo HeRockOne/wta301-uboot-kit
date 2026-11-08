@@ -96,8 +96,8 @@ echo
 echo "== 产物 =="
 ls -l u-boot.bin
 md5sum u-boot.bin
-echo "  ★ 期望 560200 B / b16152e5eda7e85265f5dfaeff634528（P22）"
-echo "    （P21c 是 556032 B / 3a4cb00e37065936e5ff89cb5710a519，P22 多了网页切槽）"
+echo "  ★ 期望 562824 B / d77e7291f5ef42aab115831a86b4ea71（P23）"
+echo "    （P21c 556032 / P22 560200 是历史值，P23 多了网页刷双系统）"
 echo "    上限 655360 B（一级解压缓冲 TPIMG_UBOOT_DEC_CAP）"
 SIZE=$(stat -c%s u-boot.bin)
 [ "$SIZE" -le 655360 ] && echo "  尺寸检查 OK（余量 $((655360-SIZE)) B）" || echo "  !! 超出一级解压上限 655360 B"

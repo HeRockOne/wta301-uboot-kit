@@ -23,6 +23,13 @@ const u8 tpimg_magic[8] = { 0x00, 0x00, 0x01, 0x00, 0x55, 0xaa, 0x9d, 0xd1 };
  * u-boot 命令行 `tpluboot` 不走它，永远是两槽都写。 */
 int tpimg_uboot_target = TPIMG_UBOOT_TARGET_BOTH;
 
+/* 网页刷**固件**时写到哪个槽：0=按包声明 1=强制 B(image_1) 2=强制 A(image_2)
+ *
+ * 由 failsafe/modules/upgrade.c 在 /upload 阶段按前端表单设定。
+ * 默认 AS_IS —— 旧行为（按包自己声明的几何写）不变，不会替用户做主。
+ */
+int tpimg_firmware_target = TPIMG_FW_TARGET_AS_IS;
+
 #define TPIMG_ALIGN_UP(x, a)  (((x) + (a) - 1) & ~((a) - 1))
 
 /* ARM32 不允许非对齐 32 位访问，逐字节拼 */
@@ -47,20 +54,125 @@ static void print_digest(const char *label, const u8 *d)
 	       d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]);
 }
 
-/* 固件头里描述「分区几何」的字段：任何一项不符就拒绝，绝不允许
- * 上传文件自己指定要写到哪 —— 那是能写残 factory_boot 的口子。 */
-static const struct {
-	u32 field_off;
-	u32 want;
-	const char *name;
-} tpimg_geom[] = {
-	{ TPIMG_F_UBOOT_OFF,  WTA301_UBOOT_OFF,  "uboot offset"  },
-	{ TPIMG_F_UBOOT_LEN,  WTA301_UBOOT_LEN,  "uboot length"  },
-	{ TPIMG_F_TPHDR_OFF,  WTA301_TPHDR_OFF,  "tphdr offset"  },
-	{ TPIMG_F_TPHDR_LEN,  WTA301_TPHDR_LEN,  "tphdr length"  },
-	{ TPIMG_F_KERNEL_OFF, WTA301_KERNEL_OFF, "kernel offset" },
-	{ TPIMG_F_ROOTFS_OFF, WTA301_ROOTFS_OFF, "rootfs offset" },
+/* ==================== 槽几何表 ====================
+ *
+ * 两个槽各有四个地址，包的**内容**与槽无关，只有「写到哪 + 头怎么重签」跟着槽走。
+ * 有了这张表，同一个固件包能写进任意一槽，不必为每个槽单独做一个包。
+ *
+ * 为什么必须用表而不是把常量换成变量：写 flash 的地址是能写残 factory_boot
+ * 的口子。所有地址只能从这里取，表里只有两个槽，上传文件永远没机会
+ * 自己指定目标（
+ * tpimg_parse 只接受表里那两套几何，别的值一律拒）。
+ */
+static const struct tpimg_slot_geo tpimg_slots[] = {
+	{
+		.name       = "image_1 (B slot)",
+		.uboot_off  = WTA301_B_UBOOT_OFF,
+		.tphdr_off  = WTA301_B_TPHDR_OFF,
+		.kernel_off = WTA301_B_KERNEL_OFF,
+		.rootfs_off = WTA301_B_ROOTFS_OFF,
+	},
+	{
+		.name       = "image_2 (A slot)",
+		.uboot_off  = WTA301_UBOOT_OFF,
+		.tphdr_off  = WTA301_TPHDR_OFF,
+		.kernel_off = WTA301_KERNEL_OFF,
+		.rootfs_off = WTA301_ROOTFS_OFF,
+	},
 };
+
+const struct tpimg_slot_geo *tpimg_slot_by_id(int id)
+{
+	if (id == 1)
+		return &tpimg_slots[0];
+	if (id == 2)
+		return &tpimg_slots[1];
+	return NULL;
+}
+
+const struct tpimg_slot_geo *tpimg_slot_by_kernel(u32 kernel_off)
+{
+	int i;
+
+	for (i = 0; i < (int)ARRAY_SIZE(tpimg_slots); i++)
+		if (tpimg_slots[i].kernel_off == kernel_off)
+			return &tpimg_slots[i];
+	return NULL;
+}
+
+int tpimg_apply_target(struct tpimg_info *info, int slot)
+{
+	const struct tpimg_slot_geo *g = tpimg_slot_by_id(slot);
+
+	if (!g)
+		return -1;
+
+	info->uboot_off  = g->uboot_off;
+	info->uboot_len  = TPIMG_UBOOT_SLOT_LEN;  /* 两槽都是 0x40000 */
+	info->tphdr_off  = g->tphdr_off;
+	info->tphdr_len  = TPIMG_HDR_LEN;        /* 两槽都是 0x20000 */
+	info->kernel_off = g->kernel_off;
+	info->rootfs_off = g->rootfs_off;
+	info->target_slot = slot;
+
+	printf("tpimg: target slot = %s (kernel @0x%08x, rootfs @0x%08x)\n",
+	       g->name, g->kernel_off, g->rootfs_off);
+	return 0;
+}
+
+/* 固件头里的 6 个几何字段：必须与**表里某一槽**完全一致，否则拒收。
+ * 返回匹配到的槽 id（1/2），不匹配返回 0。
+ *
+ * 为什么不直接拿包里的数值：只要允许上传文件自己指定偏移，
+ * 一个改过的包就能把 kernel 写到 0x0 把 factory_boot 冲掉。
+ * 所以只认白名单里的两套几何，写到哪里由表决定。
+ */
+static int tpimg_match_geometry(const u8 *h)
+{
+	static const struct {
+		u32 field_off;
+		const char *name;
+	} geom_fields[] = {
+		{ TPIMG_F_UBOOT_OFF,  "uboot offset"  },
+		{ TPIMG_F_UBOOT_LEN,  "uboot length"  },
+		{ TPIMG_F_TPHDR_OFF,  "tphdr offset"  },
+		{ TPIMG_F_TPHDR_LEN,  "tphdr length"  },
+		{ TPIMG_F_KERNEL_OFF, "kernel offset" },
+		{ TPIMG_F_ROOTFS_OFF, "rootfs offset" },
+	};
+	const struct tpimg_slot_geo *g;
+	int s, i;
+
+	for (s = 1; s <= 2; s++) {
+		u32 want[6];
+		int hit = 1;
+
+		g = tpimg_slot_by_id(s);
+		want[0] = g->uboot_off;
+		want[1] = TPIMG_UBOOT_SLOT_LEN;  /* 两槽都是 0x40000 */
+		want[2] = g->tphdr_off;
+		want[3] = TPIMG_HDR_LEN;         /* 两槽都是 0x20000 */
+		want[4] = g->kernel_off;
+		want[5] = g->rootfs_off;
+
+		for (i = 0; i < (int)ARRAY_SIZE(geom_fields); i++) {
+			u32 got = be32(h + geom_fields[i].field_off);
+
+			if (got != want[i]) {
+				if (s == 2)
+					printf("tpimg: header +0x%02x %s = 0x%08x,"
+					       " neither A nor B slot geometry\n",
+					       geom_fields[i].field_off,
+					       geom_fields[i].name, got);
+				hit = 0;
+				break;
+			}
+		}
+		if (hit)
+			return s;
+	}
+	return 0;
+}
 
 int tpimg_parse(const void *addr, ulong size, struct tpimg_info *info,
 		const char **err)
@@ -68,7 +180,7 @@ int tpimg_parse(const void *addr, ulong size, struct tpimg_info *info,
 	const u8 *h = addr;
 	ulong avail, rlen;
 	u32 klen, vlen;
-	int i;
+	int slot;
 
 	memset(info, 0, sizeof(*info));
 
@@ -87,18 +199,14 @@ int tpimg_parse(const void *addr, ulong size, struct tpimg_info *info,
 		return -1;
 	}
 
-	for (i = 0; i < ARRAY_SIZE(tpimg_geom); i++) {
-		u32 got = be32(h + tpimg_geom[i].field_off);
-
-		if (got != tpimg_geom[i].want) {
-			*err = "wrong_partition_geometry";
-			printf("tpimg: header +0x%02x %s = 0x%08x,"
-			       " expected 0x%08x\n",
-			       tpimg_geom[i].field_off, tpimg_geom[i].name,
-			       got, tpimg_geom[i].want);
-			return -1;
-		}
+	/* 几何必须与 A 或 B 槽之一完全一致。两套都不匹配就拒收 ——
+	 * 这是唯一把 upload 文件与 flash 地址隔开的阀。 */
+	slot = tpimg_match_geometry(h);
+	if (!slot) {
+		*err = "wrong_partition_geometry";
+		return -1;
 	}
+	printf("tpimg: header matches image_%d geometry\n", slot);
 
 	info->uboot_off  = be32(h + TPIMG_F_UBOOT_OFF);
 	info->uboot_len  = be32(h + TPIMG_F_UBOOT_LEN);
@@ -106,6 +214,19 @@ int tpimg_parse(const void *addr, ulong size, struct tpimg_info *info,
 	info->tphdr_len  = be32(h + TPIMG_F_TPHDR_LEN);
 	info->kernel_off = be32(h + TPIMG_F_KERNEL_OFF);
 	info->rootfs_off = be32(h + TPIMG_F_ROOTFS_OFF);
+	info->target_slot = slot;
+
+	/* 前端指定了目标槽就覆盖包声明的几何。
+	 * 必须在几何白名单之后 —— 这样 target 只能落到表里两个槽，
+	 * 不论它被谁写成什么值都会在 tpimg_apply_target 里被挡住。 */
+	if (tpimg_firmware_target != TPIMG_FW_TARGET_AS_IS) {
+		if (tpimg_apply_target(info, tpimg_firmware_target)) {
+			*err = "bad_firmware_target";
+			printf("tpimg: firmware target %d is not a valid slot\n",
+			       tpimg_firmware_target);
+			return -1;
+		}
+	}
 
 	klen = be32(h + TPIMG_F_KERNEL_LEN);
 	vlen = be32(h + TPIMG_F_ROOTFS_VERIFY);
@@ -285,13 +406,18 @@ int tpimg_parse_factory(const void *addr, ulong size, struct tpimg_info *info,
 	printf("tpimg:   kernel area 0x%x, kernel||rootfs is contiguous\n",
 	       TPFACT_KERNEL_AREA);
 
-	/* 头里的几何字段用本板真值（一级只让写这四个位置） */
+	/* 头里的几何字段用本板真值（一级只验这四个位置）。
+	 *
+	 * 注意：原厂容器（55aa4c5e）里的 kernel/rootfs 是按**原厂 A 槽布局**排的，
+	 * 所以这里先把 target_slot 定为 image_2。真正写哪个槽由
+	 * tpimg_apply_target() 在写入前改写几何决定 —— 包内容与槽无关。 */
 	info->uboot_off         = WTA301_UBOOT_OFF;
 	info->uboot_len         = WTA301_UBOOT_LEN;
 	info->tphdr_off         = WTA301_TPHDR_OFF;
 	info->tphdr_len         = WTA301_TPHDR_LEN;
 	info->kernel_off        = WTA301_KERNEL_OFF;
 	info->rootfs_off        = WTA301_ROOTFS_OFF;
+	info->target_slot       = 2;
 	info->kernel_len        = TPFACT_KERNEL_AREA;
 	info->rootfs_verify_len = vlen;
 	info->kernel            = fit;
@@ -299,33 +425,130 @@ int tpimg_parse_factory(const void *addr, ulong size, struct tpimg_info *info,
 	info->rootfs_len        = vlen;
 	info->rootfs_write_len  = vlen;
 
+	/* 同 tpimg_parse：前端指定目标槽就覆盖 */
+	if (tpimg_firmware_target != TPIMG_FW_TARGET_AS_IS) {
+		if (tpimg_apply_target(info, tpimg_firmware_target)) {
+			*err = "bad_firmware_target";
+			printf("tpimg: firmware target %d is not a valid slot\n",
+			       tpimg_firmware_target);
+			return -1;
+		}
+	}
+
 	return 0;
 }
 
+/* 读目标槽现行头 + 重签。
+ *
+ * 改动面：
+ *   +0x48/+0x4c/+0x50/+0x54/+0x58/+0x60  几何字段 -> 目标槽真值
+ *   +0x5c  kernel 区长度
+ *   +0x64  参与校验的 rootfs 长度
+ *   +0xa0  md5(kernel 区 ‖ rootfs 前段)        ← 现场算
+ *   +0x90  md5(目标槽 u-boot 区 0x40000)      ← 现场读 flash 算
+ *
+ * +0x90 为什么必须现算而不能沿用：现行头的 +0x90 描述的是**它自己那个槽**
+ * 的 u-boot。跨槽写入时如果照抄，目标槽会被签成错的摘要，一级 u-boot
+ * 直接判该槽无效。
+ *
+ * +0x90 为什么必须校验目标槽真的有 u-boot：如果目标槽的 u-boot 区是空的
+ * （全 0xFF），把它的 md5 写进 +0x90 会让一级**通过 md5 校验**然后去解压
+ * 一堆 0xFF，失败后仍照样 blx 过去。当时 boot_flag 若指向这个槽就是变砖。
+ * 所以宁可不写，让用户先把 u-boot 刷进那个槽。
+ */
 int tpimg_build_header(const struct tpimg_info *info, u8 *out,
 		const char **err)
 {
 	nand_info_t *nand = &nand_info[CONFIG_NAND_FLASH_INFO_IDX];
+	const struct tpimg_slot_geo *g;
 	size_t len = TPIMG_HDR_LEN;
-	u32 old_klen, old_vlen;
+	u32 old_klen, old_vlen, old_koff;
 	u8 sum[16];
 	int ret;
 
-	ret = nand_read(nand, WTA301_TPHDR_OFF, &len, out);
-	if (ret || len != TPIMG_HDR_LEN) {
-		*err = "header_read_failed";
-		printf("tpimg: cannot read live header at 0x%x (ret=%d, got=%lu)\n",
-		       WTA301_TPHDR_OFF, ret, (ulong)len);
+	g = tpimg_slot_by_kernel(info->kernel_off);
+	if (!g || info->tphdr_off != g->tphdr_off ||
+	    info->uboot_off != g->uboot_off ||
+	    info->rootfs_off != g->rootfs_off) {
+		*err = "target_slot_not_in_table";
+		printf("tpimg: refusing to write at an address not in the slot table"
+		       " (kernel 0x%x / tphdr 0x%x / uboot 0x%x / rootfs 0x%x)\n",
+		       info->kernel_off, info->tphdr_off, info->uboot_off,
+		       info->rootfs_off);
 		return -1;
 	}
 
-	if (memcmp(out, tpimg_magic, 8) || be32(out + TPIMG_F_KERNEL_OFF) !=
-	    WTA301_KERNEL_OFF) {
-		*err = "live_header_invalid";
-		printf("tpimg: live header at 0x%x is not a WTA301 TP header\n",
-		       WTA301_TPHDR_OFF);
+	ret = nand_read(nand, g->tphdr_off, &len, out);
+	if (ret || len != TPIMG_HDR_LEN) {
+		*err = "header_read_failed";
+		printf("tpimg: cannot read live header at 0x%x (ret=%d, got=%lu)\n",
+		       g->tphdr_off, ret, (ulong)len);
 		return -1;
 	}
+
+	/* 确认读到的是这个槽自己的头，而不是对方槽的 */
+	old_koff = be32(out + TPIMG_F_KERNEL_OFF);
+	if (memcmp(out, tpimg_magic, 8) || old_koff != g->kernel_off) {
+		*err = "live_header_invalid";
+		printf("tpimg: live header at 0x%x is not a WTA301 TP header"
+		       " for %s (kernel_off 0x%x)\n",
+		       g->tphdr_off, g->name, old_koff);
+		return -1;
+	}
+
+	/* 目标槽必须真的有一个能启动的 u-boot。
+	 *
+	 * 判据只看「那块 flash 里是否真有 u-boot」，**不跟包里的 +0x90 比**：
+	 * 包里的 +0x90 本来就是先前用别的 u-boot 签的，而 +0x90 会在下面
+	 * 用**实物**重算，所以两者不等很正常，拿它当前提会误拦。
+	 *
+	 * 为什么必须有这个前提：固件包不含 u-boot。若目标槽的 0x40000 区
+	 * 是空的（全 0xFF），写进去的固件头就算签得再对也启不了 ——
+	 * 一级会直接 blx 到解压失败的一堆 0xFF 上。
+	 */
+	{
+		static u8 uboot_slot[TPIMG_UBOOT_SLOT_LEN] __aligned(64);
+		size_t ulen = TPIMG_UBOOT_SLOT_LEN;
+		ulong i;
+		int blank = 1;
+
+		if (nand_read(nand, g->uboot_off, &ulen, uboot_slot) ||
+		    ulen != TPIMG_UBOOT_SLOT_LEN) {
+			*err = "target_uboot_unreadable";
+			printf("tpimg: cannot read %s u-boot area @0x%x\n",
+			       g->name, g->uboot_off);
+			return -1;
+		}
+
+		for (i = 0; i < TPIMG_UBOOT_SLOT_LEN; i++) {
+			if (uboot_slot[i] != 0xff) {
+				blank = 0;
+				break;
+			}
+		}
+		if (blank) {
+			*err = "target_uboot_blank";
+			printf("tpimg: %s u-boot area @0x%x is blank (all 0xFF).\n"
+			       "tpimg: flashing firmware there would produce an"
+			       " unbootable slot - write a u-boot slot image first.\n",
+			       g->name, g->uboot_off);
+			return -1;
+		}
+
+		/* 用**实物**重签 +0x90（而不是沿用它原来的值） */
+		md5(uboot_slot, TPIMG_UBOOT_SLOT_LEN, sum);
+		memcpy(out + TPIMG_F_MD5_UBOOT, sum, 16);
+		printf("tpimg: %s u-boot @0x%x present, +0x90 re-signed from flash\n",
+		       g->name, g->uboot_off);
+	}
+
+	/* 几何字段改写成目标槽真值（跨槽写入时它们原本指另一个槽） */
+	put_be32(out + TPIMG_F_UBOOT_OFF,  g->uboot_off);
+	put_be32(out + TPIMG_F_UBOOT_LEN,  info->uboot_len);
+	put_be32(out + TPIMG_F_TPHDR_OFF,  g->tphdr_off);
+	put_be32(out + TPIMG_F_TPHDR_LEN,  info->tphdr_len);
+	put_be32(out + TPIMG_F_KERNEL_OFF, g->kernel_off);
+	put_be32(out + TPIMG_F_ROOTFS_OFF, g->rootfs_off);
 
 	old_klen = be32(out + TPIMG_F_KERNEL_LEN);
 	old_vlen = be32(out + TPIMG_F_ROOTFS_VERIFY);
@@ -336,13 +559,11 @@ int tpimg_build_header(const struct tpimg_info *info, u8 *out,
 	put_be32(out + TPIMG_F_KERNEL_LEN, info->kernel_len);
 	put_be32(out + TPIMG_F_ROOTFS_VERIFY, info->rootfs_verify_len);
 
-	/* +0x90（u-boot 槽 md5）不动：上传文件里没有 u-boot 槽，算不出来；
-	 * 而现行头能让我们从 A 槽启动，说明它的 +0x90 已经被一级验过。 */
 	md5((u8 *)info->kernel, (int)(info->kernel_len + info->rootfs_verify_len),
 	    sum);
 	memcpy(out + TPIMG_F_MD5_PAYLOAD, sum, 16);
 	print_digest("new payload md5:", sum);
-	print_digest("kept uboot md5:", out + TPIMG_F_MD5_UBOOT);
+	print_digest("new uboot md5:", out + TPIMG_F_MD5_UBOOT);
 
 	return 0;
 }
@@ -366,10 +587,17 @@ static int tpimg_run(const char *fmt, ...)
 	return run_command(cmd, 0);
 }
 
+/* 把 info 里那套几何真正写进 flash。
+ *
+ * 地址一律取自 info（而 info 只可能来自 tpimg_slots[] 白名单，
+ * 见 tpimg_build_header 里的复核），所以上传文件没有任何机会
+ * 让 kernel 写到 0x0 去冲掉 factory_boot。
+ */
 int tpimg_write(const struct tpimg_info *info, u8 *hdr_buf)
 {
 	ulong kaddr = (ulong)info->kernel;
 	ulong raddr = (ulong)info->rootfs;
+	const struct tpimg_slot_geo *g;
 	const char *err;
 	int ret;
 
@@ -377,46 +605,57 @@ int tpimg_write(const struct tpimg_info *info, u8 *hdr_buf)
 	if (ret)
 		return ret;
 
+	/* 头已经按目标槽重签完毕，此刻才确定最终地址 */
+	g = tpimg_slot_by_kernel(be32(hdr_buf + TPIMG_F_KERNEL_OFF));
+	if (!g) {
+		printf("tpimg: header re-sign produced an unknown kernel offset\n");
+		return -1;
+	}
+
 	printf("\n********************************\n"
 	       " TP-LINK FIRMWARE UPGRADING\n"
+	       " target: %s\n"
 	       " DO NOT POWER OFF DEVICE\n"
-	       "********************************\n");
+	       "********************************\n", g->name);
 
 	/* 顺序固定：kernel -> rootfs -> 头。
 	 * 中途断电时头还是旧的，一级校验不过就跳另一个槽 —— 不会变砖。 */
-	ret = tpimg_run("nand erase 0x%x 0x%x", WTA301_KERNEL_OFF,
+	ret = tpimg_run("nand erase 0x%x 0x%x", g->kernel_off,
 			info->kernel_len);
 	if (ret)
 		goto fail;
 	ret = tpimg_run("nand write 0x%lx 0x%x 0x%x", kaddr,
-			WTA301_KERNEL_OFF, info->kernel_len);
+			g->kernel_off, info->kernel_len);
 	if (ret)
 		goto fail;
 
-	ret = tpimg_run("nand erase 0x%x 0x%lx", WTA301_ROOTFS_OFF,
+	ret = tpimg_run("nand erase 0x%x 0x%lx", g->rootfs_off,
 			info->rootfs_write_len);
 	if (ret)
 		goto fail;
 	ret = tpimg_run("nand write 0x%lx 0x%x 0x%lx", raddr,
-			WTA301_ROOTFS_OFF, info->rootfs_write_len);
+			g->rootfs_off, info->rootfs_write_len);
 	if (ret)
 		goto fail;
 
-	ret = tpimg_run("nand erase 0x%x 0x%x", WTA301_TPHDR_OFF,
+	ret = tpimg_run("nand erase 0x%x 0x%x", g->tphdr_off,
 			TPIMG_HDR_LEN);
 	if (ret)
 		goto fail;
 	ret = tpimg_run("nand write 0x%lx 0x%x 0x%x", (ulong)hdr_buf,
-			WTA301_TPHDR_OFF, TPIMG_HDR_LEN);
+			g->tphdr_off, TPIMG_HDR_LEN);
 	if (ret)
 		goto fail;
 
-	printf("\ntpimg: A slot written and header re-signed, reset to boot it\n");
+	printf("\ntpimg: %s written and re-signed."
+	       " boot_flag NOT touched - switch with /bootflag or wta301-slot\n",
+	       g->name);
 	return 0;
 
 fail:
-	printf("\ntpimg: write failed at step above, A slot is now inconsistent\n"
-	       "tpimg: level-1 will fall back to the other slot\n");
+	printf("\ntpimg: write failed at step above, %s is now inconsistent\n"
+	       "tpimg: the other slot is untouched, level-1 will fall back to it\n",
+	       g->name);
 	return ret;
 }
 

@@ -402,6 +402,17 @@ pre.box{background:#080e15;border-color:#2a3d52;color:#a8e2f2;font-size:12.5px;l
             </div>
             <input type="file" id="file">
 
+            <!-- 写到哪个槽：旧行为是写死 A 槽，现在可选 -->
+            <div class="radios" id="fwtgt" style="margin-top:14px">
+              <label class="rad on"><input type="radio" name="fwt" value="0" checked>
+                <span class="rl"><b>按固件声明的槽</b><span>包里的头说写哪里就写哪里；TP-Link 官方包一律是 A 槽</span></span></label>
+              <label class="rad"><input type="radio" name="fwt" value="1">
+                <span class="rl"><b>强制写 B 槽（image_1）</b><span>0x0880000 / 0x0FC0000 · 原厂改造版放这里，和 OpenWrt 共存</span></span></label>
+              <label class="rad"><input type="radio" name="fwt" value="2">
+                <span class="rl"><b>强制写 A 槽（image_2）</b><span>0x4880000 / 0x4FC0000 · OpenWrt 放这里</span></span></label>
+            </div>
+            <div class="hint" id="fwthint" style="display:none"></div>
+
             <div class="steps">
               <div class="step"><button class="btn btn-p" id="bcheck" disabled><span class="n">1</span>上传并校验</button></div>
               <div class="step"><button class="btn btn-s" id="bflash" disabled><span class="n">2</span>写入 Flash</button></div>
@@ -905,6 +916,7 @@ function loadSlots(){
       if(!s || !s.hdr_ok || !s.md5_match || !s.decode_ok) state.slotBad.push(n);
     });
     paintBootSel();
+    paintFwHint();
     info.fw = fw ? (fw.name + " · " + fw.label) : "—";
     paintInfo();
     $("slotpre").textContent = JSON.stringify(d, null, 1);
@@ -1021,7 +1033,7 @@ Array.prototype.forEach.call(document.querySelectorAll(".tabs button"), function
 
 /* ---------------- state ---------------- */
 var state = { file:null, ubootFile:null, validated:false, envLoaded:false,
-              target:0, done:false };
+              target:0, fwtarget:0, slotBad:[], done:false };
 
 /* ---------------- file pickers ---------------- */
 function wirePicker(cfg){
@@ -1082,6 +1094,41 @@ Array.prototype.forEach.call(document.querySelectorAll("#targets .rad"), functio
   });
 });
 
+/* 固件页的「写到哪个槽」。默认 0 = 按包声明（旧行为，不动）。 */
+state.fwtarget = 0;
+Array.prototype.forEach.call(document.querySelectorAll("#fwtgt .rad"), function(l){
+  l.addEventListener("click", function(){
+    Array.prototype.forEach.call(document.querySelectorAll("#fwtgt .rad"), function(x){
+      x.classList.remove("on");
+    });
+    l.classList.add("on");
+    state.fwtarget = +l.querySelector("input").value;
+    paintFwHint();
+  });
+});
+
+/* B 槽需要先有 u-boot，否则固件写进去也启不了。
+ * 设备端会真的回读那个槽的 u-boot 区校验（tpimg_build_header 里），
+ * 检验不过就拒写 —— 这里只是提前提醒。 */
+function paintFwHint(){
+  var el = $("fwthint");
+  if(!el) return;
+  if(state.fwtarget === 1){
+    var bad = (state.slotBad || []).indexOf(1) >= 0;
+    el.style.display = "";
+    el.style.color = bad ? "#e88" : "";
+    el.textContent = bad
+      ? "⚠ B 槽的 u-boot 校验不过（或未安装）。请先在「高级 → U-Boot」里写 B 槽，否则写固件会被拒绝。"
+      : "B 槽的 u-boot 已就绪。写完后到「启动槽」卡片切到 B 槽即启动原厂。";
+  } else if(state.fwtarget === 2){
+    el.style.display = "";
+    el.style.color = "";
+    el.textContent = "A 槽。写完后到「启动槽」卡片切到 A 槽即启动 OpenWrt。";
+  } else {
+    el.style.display = "none";
+  }
+}
+
 /* ---------------- upload ---------------- */
 function doUpload(cfg){
   var f = cfg.file;
@@ -1131,7 +1178,8 @@ function doUpload(cfg){
 }
 $("bcheck").onclick = function(){
   doUpload({field:"firmware", file:state.file, btn:"bcheck", btn2:"bflash",
-    status:"st", pfx:"1", onOk:function(){ state.validated = true; }});
+    status:"st", pfx:"1", extra:{slot:"" + (state.fwtarget || 0)},
+    onOk:function(){ state.validated = true; }});
 };
 $("buboot").onclick = function(){
   doUpload({field:"uboot", file:state.ubootFile, btn:"buboot", btn2:"bubootw",
