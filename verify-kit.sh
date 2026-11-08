@@ -129,10 +129,25 @@ ok "4 个无 copyright 头的文件状态未变（加署名会是错的）"
 # ══════════════════════════════════════════════════════════════════
 sec "3. 编码 / 换行（u-boot 侧必须 LF）"
 # ══════════════════════════════════════════════════════════════════
+# 二进制文件不参与编码检查（PNG 里当然有 0x0d、当然没有"末尾换行"）
+is_text() {
+	case "$1" in
+		*.png|*.jpg|*.jpeg|*.gif|*.bmp|*.ico|*.zip|*.gz|*.xz|*.bz2|\
+		*.bin|*.img|*.pyc|*.o|*.a|*.so|*.elf|*.ttf) return 1 ;;
+	esac
+	[ -f "$1" ] || return 1
+	# 前 8 KB 里出现 NUL 就当二进制
+	od -An -tx1 -N 8192 "$1" 2>/dev/null | tr -d ' \n' | grep -q '00' && return 1
+	return 0
+}
+
 # .gitattributes 是 `* -text`，所以仓库里存的什么、检出就是什么。
 # 一旦有人从 Windows 提交 CRLF，u-boot 的 Makefile 与版权头校验都会出问题。
+# ⚠️ 这里用 od 判 CR，不用 `grep -qU $'\r'`：MSYS/Windows 的 grep 把 CR 当行尾，
+#    会对每一个文本文件都命中，全仓误报（实测在 Git Bash 上 40+ 文件全红）。
 crlf=$(find . -path ./.git -prune -o -type f -print | while read -r f; do
-	grep -qU $'\r' "$f" 2>/dev/null && echo "$f"
+	is_text "$f" || continue
+	od -An -tx1 -N 65536 "$f" 2>/dev/null | tr -d ' \n' | grep -q '0d' && echo "$f"
 done)
 if [ -n "$crlf" ]; then
 	echo "$crlf" | while read -r f; do bad "CRLF：$f"; done
@@ -144,6 +159,7 @@ fi
 miss=0
 while read -r f; do
 	[ -s "$f" ] || continue
+	is_text "$f" || continue
 	[ "$(tail -c1 "$f" | od -An -tx1 | tr -d ' \n')" = "0a" ] || { bad "缺末尾换行：$f"; miss=1; }
 done < <(find . -path ./.git -prune -o -type f -print)
 [ $miss -eq 0 ] && ok "所有文件都有末尾换行"
@@ -177,13 +193,14 @@ else
 	bad "$H 的 CONFIG_SYS_TEXT_BASE 不是 0x49900000 —— 这会让 TTL 直接死"
 fi
 
-# 槽大小余量：一级解压上限 0xA0000=655360 B，交付 556032 B → 余量 99328 B。
+# 槽大小余量：一级解压上限 0xA0000=655360 B，交付 P22 560200 B → 余量 95160 B
+# （P21c 为 556032 B / 余量 99328 B，历史值）。
 # ⚠️ 这两个常量定义在 tplink_tpimg.h，不在 ipq5018.h。
 TH=files/include/failsafe/tplink_tpimg.h
 SLOT_CAP=$(grep -oE 'define TPIMG_UBOOT_DEC_CAP\s+0x[0-9a-fA-F]+' "$TH" | head -1 | grep -oE '0x[0-9a-fA-F]+')
 if [ -n "$SLOT_CAP" ]; then
-	ok "TPIMG_UBOOT_DEC_CAP = $SLOT_CAP（交付 556032 B 应在内）"
-	[ $((SLOT_CAP)) -ge 556032 ] || bad "解压上限 $SLOT_CAP < 交付镜像 556032 B"
+	ok "TPIMG_UBOOT_DEC_CAP = $SLOT_CAP（交付 560200 B 应在内）"
+	[ $((SLOT_CAP)) -ge 560200 ] || bad "解压上限 $SLOT_CAP < 交付镜像 560200 B"
 else
 	bad "$TH 里没找到 TPIMG_UBOOT_DEC_CAP（一级解压上限，扣错了会刷成砖）"
 fi
@@ -247,10 +264,10 @@ else
 fi
 
 # 唯一的成功判据（README §3 验收判据）必须与实测值一致
-grep -q '3a4cb00e37065936e5ff89cb5710a519' README.md \
-	&& ok "README 记录 u-boot.bin 期望 md5 3a4cb00e…" || warn "README 缺 u-boot.bin 期望 md5"
-grep -q 'd0ada9f7' README.md \
-	&& ok "README 记录槽镜像 md5 d0ada9f7…" || warn "README 缺槽镜像 md5"
+grep -q 'b16152e5eda7e85265f5dfaeff634528' README.md \
+	&& ok "README 记录 u-boot.bin 期望 md5 b16152e5…" || warn "README 缺 u-boot.bin 期望 md5"
+grep -q '0cf778c2' README.md \
+	&& ok "README 记录槽镜像 md5 0cf778c2…" || warn "README 缺槽镜像 md5"
 
 # 历史快照必须明确标注不可直接用（否则有人会 copy 错文件）
 sed -n '/^## 5\./,/^## 6\./p' README.md | grep -q '不要直接用' \
@@ -270,11 +287,11 @@ if [ -z "$UB" ]; then
 	warn "未找到 u-boot.bin（正常：源码树不进仓库），槽镜像重出现已跳过"
 else
 	sz=$(stat -c%s "$UB" 2>/dev/null || :)
-	[ "$sz" = "556032" ] \
-		&& ok "u-boot.bin 尺寸 556032 B" \
-		|| bad "u-boot.bin 尺寸 $sz（应 556032）"
+	[ "$sz" = "560200" ] \
+		&& ok "u-boot.bin 尺寸 560200 B" \
+		|| bad "u-boot.bin 尺寸 $sz（应 560200）"
 	m=$(md5sum "$UB" 2>/dev/null | cut -d' ' -f1)
-	[ "$m" = "3a4cb00e37065936e5ff89cb5710a519" ] \
+	[ "$m" = "b16152e5eda7e85265f5dfaeff634528" ] \
 		&& ok "u-boot.bin md5 与 §3 判据一致" \
 		|| warn "u-boot.bin md5 $m（与发布版不同 —— 若你刚重编过属正常）"
 	# 真重出一遍槽镜像
@@ -286,9 +303,9 @@ else
 			sm=$(md5sum "$SLOT" | cut -d' ' -f1)
 			[ "$ssz" = "262144" ] \
 				&& ok "槽镜像 262144 B" || bad "槽镜像 $ssz B（应 262144）"
-			[ "$sm" = "d0ada9f76e4f1aba9b96a559a5220cee" ] \
-				&& ok "槽镜像 md5 = d0ada9f7…（与板上实物一致）" \
-				|| warn "槽镜像 md5 $sm（期望 d0ada9f7…）"
+			[ "$sm" = "0cf778c20152f37f3ad306d1c0dbe6d0" ] \
+				&& ok "槽镜像 md5 = 0cf778c2…（P22 交付值）" \
+				|| warn "槽镜像 md5 $sm（期望 0cf778c2…）"
 		else
 			bad "mk_uboot_slot.py 没产出 .bin"
 		fi

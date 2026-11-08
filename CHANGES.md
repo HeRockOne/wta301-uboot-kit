@@ -31,6 +31,21 @@
 > 修改者：WTA301 OpenWrt 移植工程。
 > 原始版权与许可见各文件头，以及本仓 `THIRD-PARTY.md` §2。
 
+### 2.1 2026-11-09 这一轮改了什么（网页切槽）
+
+| 文件 | 改动 |
+|---|---|
+| `include/failsafe/tplink_tpimg.h` | 新增 `tpimg_write_boot_flag()` 声明、`TPIMG_BOOT_FLAG_LEN` |
+| `board/qca/arm/common/tplink_tpimg.c` | 新增 `tpimg_write_boot_flag()`（整块读→校验魔数→改 4 字节→擦写→换缓冲回读） |
+| `failsafe/modules/tplinkinfo.c` | 新增 `POST /bootflag` 端点 |
+| `failsafe/fsdata/index.html` | 新增「启动槽」卡片 + `paintBootSel()`/`setBootSlot()`/`doSwitchBoot()` + `/bootflag` mock |
+
+目的：以前切 A/B 槽只能进系统跑 `wta301-slot`，系统起不来就没有入口；
+现在 u-boot 自己的网页恢复页就能切。详见 `docs/SLOT-SWITCH.md`。
+
+顺带把 `build/build_j1.sh` 的 `python` 改成 `python3`（Ubuntu 24.04 无 `python`），
+并加 `UBOOT_SKIP_GITDIRTY=1`（巨型仓库下 `git status` 会拖 90 秒以上）。
+
 ### 2.1 必须诚实说明的一点
 
 **我们无法逐行区分哪些是 chenxin527 写的、哪些是我们写的。**

@@ -1,7 +1,7 @@
 # WTA301 u-boot kit —— 源码复现包
 
 > 目标：不拷源码树、不拷工具链，只用本仓 + 上游固定引用，重建出
-> `u-boot.bin`（556,032 B）→ LZMA 槽镜像（262,144 B）。
+> `u-boot.bin`（P22 = 560,200 B，P21c = 556,032 B）→ LZMA 槽镜像（262,144 B）。
 >
 > **本仓 = 全部自研代码**。23 个文件 / 13,063 行 / 385 KB。除此之外没有任何
 > 改动，基座一律从上游取。
@@ -35,15 +35,25 @@
 
 ### 1.1 构建包装 commit 是硬证，不是回忆
 
-已经交付的 `u-boot.bin`（556,032 B）里面直接带着版本横幅：
+已经交付的 `u-boot.bin` 里面直接带着版本横幅：
 
 ```
+# P21c（556,032 B）
 $ strings u-boot.bin | grep '^U-Boot 2016'
 U-Boot 2016.01-9ce3157-dirty (2026-11-06 13:33:07 +0800)
-              ↑↑↑↑↑↑↑
+
+# P22（560,200 B，多了网页切槽）
+$ strings u-boot.bin | grep '^U-Boot 2016'
+U-Boot 2016.01-9ce3157-dirty-9ce3157 (2026-11-09 02:03:12 +0800)
 ```
 
 `9ce3157` 就是 `9ce31573` 的缩写，`-dirty` 是因为叠加了本目录 `files/` 的改动。
+
+> ⚠️ P22 横幅尾部多了一个 `-9ce3157`。原因是 `build_j1.sh` 设了
+> `UBOOT_SKIP_GITDIRTY=1`（跳过 90 秒的 `git status`），此时 Makefile 里
+> `GIT_VERSION` 依然是短哈希，而 `setlocalversion` 已经把短哈希写进
+> `U_BOOT_VERSION` 了 —— 拼接两次。**纯字符串，不影响任何行为**，
+> 但复现时你看到的横幅就是这个样子，别以为编错了。
 ⇒ **构建包装确实钉在 `9ce31573`，已由产物自证。**
 
 ### 1.2 残余风险：codelinaro 侧的 commit
@@ -58,7 +68,7 @@ U-Boot 2016.01-9ce3157-dirty (2026-11-06 13:33:07 +0800)
    diff 才需要逐字节精确的基座。
 
 ⚠️ **未验证的事**：本机原树与上面那个 GitHub 镜像**是否逐字节相同，没对过**。
-镜像自称剥自同一个发布标签，但只有亲自跑一遍编译、对出 `u-boot.bin` 556,032 B
+镜像自称剥自同一个发布标签，但只有亲自跑一遍编译、对出 `u-boot.bin` 指纹
 才算实证。**目前只到「同代」这个级别，未到「同一棵树」。**
 
 ### 1.3 为什么旧读还会跑偏
@@ -79,6 +89,9 @@ wta301-uboot-kit/
 ├── LICENSE             GPL-2.0
 ├── verify-kit.sh       本仓自检（23 文件在位 / 版权头 / 编码 / 无个人路径 / 常量）
 ├── files/              ★ 当前有效代码（23 个文件，按 u-boot 树内相对路径）
+├── docs/
+│   ├── images/failsafe-console.png   网页恢复控制台截图（预览模式）
+│   └── SLOT-SWITCH.md     ★ 网页一键切 A/B 槽（`POST /bootflag`），不再依赖用户态脚本
 ├── build/              构建脚本
 │   ├── build_board.sh     官方流程（make defconfig → 清 DTB → make -j6）
 │   ├── build_j1.sh        ★ 推荐入口（-j1 串行，见 §4 的坑，跑完自动出槽镜像）
@@ -153,6 +166,23 @@ python build/mk_uboot_slot.py u-boot.bin <输出目录>
 | 槽内 LZMA 解压后 | 逐字节等于 `u-boot.bin` |
 | 板上 `tplcheck` | 两槽 `OK (md5 matches, decodes to 0x87c00)` |
 
+### 验收判据（P22 —— 网页切槽版）
+
+| 项 | 期望 |
+|---|---|
+| `u-boot.bin` | **560,200 B**(0x88c48) |
+| `u-boot.bin` md5 | `b16152e5eda7e85265f5dfaeff634528` |
+| 槽镜像 | 262,144 B |
+| 槽 md5 | **`0cf778c20152f37f3ad306d1c0dbe6d0`** |
+| 槽 crc32 | **`0x675D0AF2`** |
+| 槽内 LZMA 有效载荷 | 229,412 B（0x38024），余量 32,732 B = **12.5%** |
+| 一级解压余量 | 655,360 − 560,200 = 95,160 B (14.5%) |
+| `mk_uboot_slot.py` 往返 | 解压后与 `u-boot.bin` 逐字节一致 |
+| 板上 `tplcheck` | ⬜ **未上板**（本版还没刷进板子） |
+
+> **先撞的仍是「解压后 655,360 B」这条**（余量 95,160 B），不是槽大小。
+> 再往 `index.html` / `tplinkinfo.c` 里加东西时看这条。
+
 ### 验证边界（哪一步实测过、哪一步没有）
 
 诚实分开写，不要当成全都跑过：
@@ -163,7 +193,10 @@ python build/mk_uboot_slot.py u-boot.bin <输出目录>
 | `mk_uboot_slot.py` 能重出槽镜像 | ✅ **已实证（复验两次）** | 上游 OpenWrt 仓（`wta301-2512`）的 `deliver/make-deliverable.sh` 已接入：只要找到 556,032 B 的 `u-boot.bin` 就现造槽镜像，再造不出来才回落历史成品 |
 | 输入 `u-boot.bin` 指纹 | ✅ **已核对** | `src/u-boot-2016/u-boot.bin` 556,032 B / md5 `3a4cb00e37065936e5ff89cb5710a519`，与 §3 判据逐字相同 |
 | `u-boot.bin` → 槽镜像（端到端） | ✅ **已实证** | `mk_uboot_slot.py u-boot.bin` → 262,144 B / md5 `d0ada9f7…` / crc32 `0xCB2D3108`，往返校验通过（解压后与 `u-boot.bin` 逐字节相等） |
-| `build_j1.sh` 从零跑一遍出 `u-boot.bin` | ⬜ **未实跑** | 脚本已参数化（`UBOOT_TREE` / `TOOLCHAIN_BIN` 环境变量），**未在本轮执行**。已按用户指示跳过，不为它再开一轮编译。 |
+| `build_j1.sh` 从零跑一遍出 `u-boot.bin` | ✅ **P22 已实跑** | `build_j1.sh` 跑通（0 error），产出 560,200 B / md5 `b16152e5…`。**P21c 时代这一行是「未实跑」**，P22 补上了。 |
+| P22 的槽镜像可确定性重出 | ✅ **已实证** | `mk_uboot_slot.py u-boot.bin` → `0cf778c2…` / crc32 `0x675D0AF2`，与 `build_j1.sh` 末尾产出的槽镜像**逐字节相同**（两次独立生成，同一 md5） |
+| P22 已刷进板子并 `tplcheck` | ⬜ **未上板** | 本版尚未刷机（板子当前用于 5G 中继，未经用户同意不动）。刷写流程见 §6 + `docs/SLOT-SWITCH.md` §6 |
+| P22 网页切槽在真机上生效 | ⬜ **未上板** | 代码路径已在离线编译/浏览器预览下验证（JS `node --check` 通过、`tplink_tpimg.o` 0 error），**板级行为未验** |
 | 跨机器全链路（新基座 + 本 overlay → 同 md5） | ⬜ **未验证** | 受 §1.1 基座 commit 未固定所限，本就不可能保证 |
 
 > **读法**：从 `u-boot.bin` 到可刷槽镜像是**完全闭环**的（逐字节对过板子上的实物，本轮又复验一次）。
@@ -204,10 +237,10 @@ python build/mk_uboot_slot.py u-boot.bin <输出目录>
 
 ### 4.4 槽大小两条余量（P19 量化）
 
-| 约束 | 上限 | 556,032 产物对应 | 余量 |
+| 约束 | 上限 | P21c（556,032 B） | P22（560,200 B） |
 |---|---|---|---|
-| 压缩后进槽 `TPIMG_UBOOT_SLOT_LEN` | 262,144 B | 218,280 B | 43,864 B (17%) |
-| 一级解压缓冲 `TPIMG_UBOOT_DEC_CAP` | 655,360 B | 556,032 B | 99,328 B (15%) |
+| 压缩后进槽 `TPIMG_UBOOT_SLOT_LEN` | 262,144 B | 218,280 B，余 43,864 B (17%) | **229,412 B，余 32,732 B (12.5%)** |
+| 一级解压缓冲 `TPIMG_UBOOT_DEC_CAP` | 655,360 B | 556,032 B，余 99,328 B (15%) | **560,200 B，余 95,160 B (14.5%)** |
 
 先撞的是**解压后 655,360 B**。加功能前先看这条。
 
@@ -243,3 +276,56 @@ python build/mk_uboot_slot.py u-boot.bin <输出目录>
 `/result` 必须**空 body**：`net/httpd.c:549` 收到带 `Content-Type` 却没有
 `boundary` 的 POST 直接回 400（浏览器给字符串 body 会自动加
 `text/plain;charset=UTF-8`，正好踩中）。见 `docs/P20-UBOOT-UI.md` §11。
+
+---
+
+## 7. 网页一键切 A/B 槽（本版新增）
+
+> 细节见 **`docs/SLOT-SWITCH.md`**。一句话：**进网页恢复页就能切启动槽，不需要进系统跑脚本。**
+
+### 7.1 为什么这件事重要
+
+`boot_flag`（物理 `0x4000000`，首 8 字节 = `55 aa 42 46` + 大端 u32 槽号）是一级
+u-boot 唯一的选槽依据。以前切系统只能在**已经能启动的系统里**跑 `wta301-slot`
+写这 4 个字节 —— 一旦那个系统起不来，明明只差 4 个字节却没有入口。
+
+kit 的网页恢复页是 u-boot 自己，不依赖任何系统，所以它能救这个场。
+
+### 7.2 界面
+
+「固件升级」页 → 槽位卡片下方多一张 **「启动槽」** 卡片：
+
+```
+当前        image_2 · A 槽
+[ B ] 下次从 image_1 启动      ← 当前槽的按钮自动置灰
+[ A ] 下次从 image_2 启动
+只改 boot_flag 这 4 个字节，不动任何固件；重启后才生效。
+```
+
+目标槽的 u-boot 若校验不过（`hdr_ok/md5_match/decode_ok` 任一为假），
+卡片里会直接写明"切过去会被一级 u-boot 自动回退到另一段"。
+
+### 7.3 接口
+
+```
+POST /bootflag        Content-Type: multipart/form-data        slot=1 | slot=2
+→ 200 {"status":"success","info":{"slot":2,"name":"image_2","label":"A 槽"}}
+→ 400 {"status":"fail","reason":"bad_slot"}
+→ 500 {"status":"fail","reason":"write_failed"}      具体原因打在串口
+```
+
+> 必须 multipart：`net/httpd.c:518` 拿到 URI 就 `strchr(uri_ptr,'?')` 并截断，
+> GET 的 query string 进不了 `request->form`。所以不能写成 `/bootflag?slot=1`。
+
+### 7.4 安全性
+
+- 只写 `boot_flag` 分区，**不碰** `factory_boot` / 两段 u-boot / 两个 TP 头 / kernel / rootfs
+- 整块 `0x20000` 读 → 校验魔数（不对就拒写）→ 只改第 4~7 字节 → 擦 → 写 → **换缓冲回读核对**
+- 最坏情况是「切了但没换成」（一级校验不过自动回退另一段），不是变砖
+- 生效需要 reset —— 当前跑的 u-boot 已经把内核拉起来了
+
+### 7.5 离线自测（不需要板子）
+
+浏览器直接开 `files/failsafe/fsdata/index.html`（`file://`）→ 页面进预览模式
+（左下角「预览模式」）→ 点切槽按钮 → 提示成功 → 刷新，「当前」跟着变。
+`/bootflag` 的 mock 会真的改掉 mock 里的 `boot_flag`，所以前后一致。

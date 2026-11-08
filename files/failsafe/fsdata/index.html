@@ -480,6 +480,27 @@ pre.box{background:#080e15;border-color:#2a3d52;color:#a8e2f2;font-size:12.5px;l
           </div>
         </div>
 
+        <!-- 切启动槽：写 boot_flag，等价于原来 wta301-slot 脚本干的事 -->
+        <div class="card">
+          <div class="card-hd"><h2>启动槽</h2><span class="tag">boot_flag</span></div>
+          <div class="card-bd">
+            <div class="kv"><span>当前</span><b id="bfnow">—</b></div>
+            <div id="bfwarn" class="hint" style="display:none"></div>
+            <div class="steps" style="margin-top:10px">
+              <div class="step">
+                <button class="btn btn-s" id="bto1"><span class="n">B</span>下次从 image_1 启动</button>
+              </div>
+              <div class="step">
+                <button class="btn btn-s" id="bto2"><span class="n">A</span>下次从 image_2 启动</button>
+              </div>
+            </div>
+            <div class="hint" style="margin-top:10px">
+              只改 boot_flag 这 4 个字节，不动任何固件；重启后才生效。
+              目标槽的 u-boot 若校验不过，一级会自己回退到另一段。
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   </div>
@@ -676,13 +697,26 @@ var MOCK = {
     "ethaddr":"98:97:cc:a8:1f:e7","ipaddr":"192.168.1.1","serverip":"192.168.1.100",
     "bootargs":"console=ttyMSM0,115200n8 ubi.mtd=7"}}
 };
-function mockCall(path, file){
+/* body 传进来的是原始 FormData（不是 __file），因为 /bootflag 要读 slot 字段。
+ * /upload 仍按 file 处理：没有 __file 就用固定的示例值。 */
+function mockCall(path, body){
+  var file = body && body.__file;
   return new Promise(function(res){
     setTimeout(function(){
       if(path === "/upload"){
         res({status:"success", info:{name:file?file.name:"firmware.bin",
           size:file?file.size:17170432, type:"tplink", md5:"837a9a553886426ac8b184109bf1b913"}});
       } else if(path === "/result"){ res({status:"success", info:{reboot:false}});
+      } else if(path === "/bootflag"){
+        /* 预览模式：假装写成功，并把 MOCK 里的 boot_flag 改掉，
+         * 这样点完按钮再看「当前」能对得上，不会自己打自己脸。 */
+        var s = (body && body.get && body.get("slot")) || "2";
+        var n = parseInt(s, 10) === 1 ? 1 : 2;
+        MOCK["/sysinfo/tplink"].boot_flag = {ok:true, raw:n};
+        MOCK["/sysinfo/tplink"].uboot_run =
+          {slot:"image_" + n, assumed:true};
+        res({status:"success", info:{slot:n, name:"image_" + n,
+             label: n === 1 ? "B 槽" : "A 槽"}});
       } else if(path === "/reboot"){ res({status:"success"});
       } else if(MOCK[path]){ res(JSON.parse(JSON.stringify(MOCK[path]))); }
       else { res({}); }
@@ -695,7 +729,7 @@ function mockCall(path, file){
  *   net/httpd.c 解析 POST 时，头部有 Content-Type 却找不到 boundary 就直接 400。
  *   浏览器给字符串 body 会自动加 text/plain，正好踩中。 */
 function post(path, body, onProgress){
-  if(PREVIEW) return mockCall(path, body && body.__file);
+  if(PREVIEW) return mockCall(path, body);  /* 传原始 body：/bootflag 要读 slot，/upload 仍用 __file */
   return new Promise(function(res, rej){
     var x = new XMLHttpRequest();
     x.open("POST", path, true);
@@ -854,7 +888,23 @@ function loadSlots(){
     paintSlot(1, d.slots && d.slots[0], run === "image_1");
     paintSlot(2, d.slots && d.slots[1], run === "image_2");
     info.run = run || "—";
-    var fw = d.firmware_slot;
+    /* boot_flag：决定一级去验/去跑哪一段二级 u-boot，
+     * 而每段二级 u-boot 只启动自己那一段的 kernel/rootfs ——
+     * 所以它同时就是「下次用哪个系统」。 */
+    var bf = d.boot_flag || {};
+    var cur = bf.ok ? bf.raw : 0;
+    state.bootFlag = cur;
+    $("bfnow").textContent = cur === 1 ? "image_1 · B 槽"
+      : cur === 2 ? "image_2 · A 槽"
+      : "读取失败（raw=" + (bf.raw === undefined ? "?" : bf.raw) + "）";
+    /* 哪个槽的 u-boot 校验不过 —— 切过去会被一级回退，
+     * 提前把这件事写在按钮下面，别让用户以为切成功进不去是 bug。 */
+    state.slotBad = [];
+    [1, 2].forEach(function(n){
+      var s = d.slots && d.slots[n - 1];
+      if(!s || !s.hdr_ok || !s.md5_match || !s.decode_ok) state.slotBad.push(n);
+    });
+    paintBootSel();
     info.fw = fw ? (fw.name + " · " + fw.label) : "—";
     paintInfo();
     $("slotpre").textContent = JSON.stringify(d, null, 1);
@@ -862,6 +912,81 @@ function loadSlots(){
     $("sl1st").textContent = "读取失败";
     $("sl2st").textContent = "读取失败";
     $("slotpre").textContent = "读取失败：/sysinfo/tplink 无响应";
+  });
+}
+
+/* ---- 启动槽（boot_flag） ----
+ *
+ * 页面这一块替掉原来的用户态脚本：原厂侧 wta301-slot、OpenWrt 侧 wta301-slot
+ * 都只是往 boot_flag 分区第 4~7 字节写一个大端 u32。
+ * 这里走 POST /bootflag（必须是 multipart —— net/httpd.c 会把 URI 的 ?query 丢掉）。
+ */
+function paintBootSel(){
+  var cur = state.bootFlag, bad = state.slotBad || [];
+  var b1 = $("bto1"), b2 = $("bto2");
+  if(b1){ b1.disabled = (cur === 1); b1.title = cur === 1 ? "已经是这个槽" : ""; }
+  if(b2){ b2.disabled = (cur === 2); b2.title = cur === 2 ? "已经是这个槽" : ""; }
+
+  var w = $("bfwarn");
+  if(!w) return;
+  var names = bad.map(function(n){
+    return n === 1 ? "image_1（B 槽）" : "image_2（A 槽）";
+  });
+  if(names.length && names.length < 2){
+    w.style.display = "";
+    w.textContent = "注意：" + names.join("、") + " 的 u-boot 校验不过。"
+      + "切过去会被一级 u-boot 自动回退到另一段。";
+  } else if(names.length === 2){
+    w.style.display = "";
+    w.textContent = "注意：两个槽的 u-boot 都校验不过。切槽不会改变结果，"
+      + "先修 u-boot 再切。";
+  } else {
+    w.style.display = "none";
+    w.textContent = "";
+  }
+}
+
+function setBootSlot(slot){
+  var label = slot === 1 ? "image_1（B 槽）" : "image_2（A 槽）";
+  var bad = state.slotBad || [];
+  var extra = bad.indexOf(slot) >= 0
+    ? "⚠ 这个槽的 u-boot 现在校验不过，一级 u-boot 会回退到另一段，" +
+      "也就是切了也不会从这里启动。"
+    : "";
+
+  show("st", "warn", "切到 " + label + "？",
+    "只写 boot_flag 这 4 个字节，不动任何固件。重启后才生效。" + extra,
+    [], [
+      {label: "确认切换", cls: "btn-p", fn: function(){ doSwitchBoot(slot); }},
+      {label: "取消", cls: "btn-g", fn: function(){ show("st", null); }}
+    ]);
+}
+
+function doSwitchBoot(slot){
+  show("st", null);
+  var fd = new FormData();
+  fd.append("slot", String(slot));
+  post("/bootflag", fd).then(function(d){
+    if(d && d.status === "success"){
+      var inf = d.info || {};
+      state.bootFlag = inf.slot || slot;
+      paintBootSel();
+      $("bfnow").textContent = (inf.name || ("image_" + slot)) + " · "
+        + (inf.label || "");
+      show("st", "ok", "已切到 " + (inf.name || ("image_" + slot)),
+        "boot_flag 已写入并回读核对通过。重启后从这里启动。",
+        [], [{label: "立即重启", cls:"btn-p", fn: doReboot},
+             {label: "稍后手动重启", cls:"btn-g", fn:function(){ show("st", null); }}]);
+    } else {
+      show("st", "err", "写入失败",
+        "设备拒绝了这次写入。具体原因在串口日志里（tpimg: boot_flag ...）。",
+        [], [{label:"知道了", cls:"btn-g", fn:function(){ show("st", null); }}]);
+    }
+  }).catch(function(e){
+    show("st", "err", "写入失败",
+      (e && e.net) ? "连接中断，设备可能已复位。"
+                   : "设备返回了非 JSON 响应，看串口日志。",
+      [], [{label:"知道了", cls:"btn-g", fn:function(){ show("st", null); }}]);
   });
 }
 function loadEnv(){
@@ -1096,6 +1221,8 @@ $("breboot").onclick = function(){
     [{label:"确认重启", cls:"btn-p", fn:doReboot},
      {label:"取消", cls:"btn-g", fn:function(){ show("st", null); }}]);
 };
+$("bto1").onclick = function(){ setBootSlot(1); };
+$("bto2").onclick = function(){ setBootSlot(2); };
 $("brefresh").onclick = function(){
   setPill("", "刷新中…");
   loadInfo(); loadNet(); loadSlots();

@@ -72,6 +72,9 @@ rm -f arch/arm/dts/ipq5018-tplink-wta301.dtb.comb.o \
       arch/arm/dts/dtbtable.S arch/arm/dts/dtb_combined.bin
 
 echo "== make -j1（约 150–235 s）=="
+# src/ 是 1.3 GB、22,143 条未提交改动的巨型仓库，Makefile 的 GIT_DIRTY
+# 检测要跑 `git status --porcelain` 90+ 秒。不设这个，make 会卡在第 3 行出不来。
+export UBOOT_SKIP_GITDIRTY=1
 make -j1 > build_j1.log 2>&1
 rc=$?
 echo "  make rc=$rc"
@@ -93,7 +96,8 @@ echo
 echo "== 产物 =="
 ls -l u-boot.bin
 md5sum u-boot.bin
-echo "  ★ 期望 556032 B / 3a4cb00e37065936e5ff89cb5710a519（P21c）"
+echo "  ★ 期望 560200 B / b16152e5eda7e85265f5dfaeff634528（P22）"
+echo "    （P21c 是 556032 B / 3a4cb00e37065936e5ff89cb5710a519，P22 多了网页切槽）"
 echo "    上限 655360 B（一级解压缓冲 TPIMG_UBOOT_DEC_CAP）"
 SIZE=$(stat -c%s u-boot.bin)
 [ "$SIZE" -le 655360 ] && echo "  尺寸检查 OK（余量 $((655360-SIZE)) B）" || echo "  !! 超出一级解压上限 655360 B"
@@ -102,4 +106,6 @@ echo
 echo "== 出槽镜像 =="
 OUTDIR=${OUTDIR:-$KITROOT/out}
 mkdir -p "$OUTDIR"
-python "$(dirname "$0")/mk_uboot_slot.py" u-boot.bin "$OUTDIR"
+PY=$(command -v python3 || command -v python)
+[ -n "$PY" ] || { echo "build_j1.sh: 找不到 python3/python" >&2; exit 1; }
+"$PY" "$HERE/mk_uboot_slot.py" u-boot.bin "$OUTDIR"

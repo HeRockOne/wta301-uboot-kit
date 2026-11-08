@@ -81,6 +81,36 @@ struct tpimg_info {
 	const u8 *rootfs;
 };
 
+/* ==================== 槽几何表 ====================
+ *
+ * 两个槽各有四个地址，包的**内容**与槽无关，只有「写到哪 + 头怎么重签」跟着槽走。
+ * 有了这张表，同一个固件包能写进任意一槽，不必为每个槽单独做一个包。
+ */
+struct tpimg_slot_geo {
+	const char *name;
+	u32 uboot_off;
+	u32 tphdr_off;
+	u32 kernel_off;
+	u32 rootfs_off;
+};
+
+/* id: 1 = image_1（B 槽 0x0700000）/ 2 = image_2（A 槽 0x4700000）
+ * 其它值返回 NULL。 */
+const struct tpimg_slot_geo *tpimg_slot_by_id(int id);
+
+/* 按 kernel 偏移反查是哪个槽（旧包兼容用：包自己声明了写到哪）。 */
+const struct tpimg_slot_geo *tpimg_slot_by_kernel(u32 kernel_off);
+
+/* firmware 页的「写入目标」：
+ *   TPIMG_FW_TARGET_AS_IS   按包里 kernel/rootfs 声明的槽（旧行为，A 槽）
+ *   TPIMG_FW_TARGET_IMAGE1  强制写 image_1（B 槽）
+ *   TPIMG_FW_TARGET_IMAGE2  强制写 image_2（A 槽）
+ * 由 failsafe/modules/upgrade.c 在 /upload 阶段按前端表单设定。 */
+#define TPIMG_FW_TARGET_AS_IS   0
+#define TPIMG_FW_TARGET_IMAGE1  1
+#define TPIMG_FW_TARGET_IMAGE2  2
+extern int tpimg_firmware_target;
+
 /*
  * 解析 + 自检上传的 TP 镜像。
  * 返回 0 成功；-1 失败并把简短原因写进 *err（供 JSON 输出用），
@@ -114,11 +144,15 @@ int tpimg_parse_factory(const void *addr, ulong size, struct tpimg_info *info,
 
 /*
  * 生成要写进 flash 的头：
- *   以 flash 上现行的头为底本，只改 +0x5c / +0x64 / +0xa0，其余原样保留。
+ *   以**目标槽**现行的头为底本，只改 +0x5c / +0x64 / +0xa0 / +0x90，其余原样保留。
  *
- * 为什么不拿上传来的头直接写 —— +0x90 是 u-boot 槽的 md5，而上传文件里
- * 不含 u-boot 槽，无法自算。现行头能从 A 槽启动起我们自己，就证明它的
- * +0x90 是对的，保留它比信任上传者更安全。
+ * 目标槽（由 tpimg_firmware_target 选）与包声明的槽不一致时，几何字段
+ * (+0x48/+0x4c/+0x50/+0x54/+0x58/+0x60) 一并改写成目标槽的地址 ——
+ * 这就是「同一个包写进任意一槽」的实现点。
+ *
+ * +0x90 不再「沿用现行头」，而是**现场读目标槽的 u-boot 区算 md5**：
+ * 跨槽写入时现行头的 +0x90 描述的是另一个槽的 u-boot，直接沿用会把
+ * 目标槽重签成错的摘要，一级 u-boot 会判它无效。
  *
  * out 必须指向 TPIMG_HDR_LEN 字节的可写缓冲。
  */
@@ -220,5 +254,28 @@ int tpimg_boot_slot(void);
 #define TPIMG_BOOT_LOAD_ADDR    0x44000000u
 #define TPIMG_BOOT_ARGS_DEFAULT \
 	"console=ttyMSM0,115200,n8 rw rootwait"
+/* ---- 切启动槽（写 boot_flag） ----
+ *
+ * boot_flag 分区（物理 0x04000000 / 0x20000）首 8 字节 = 魔数 55aa4246 +
+ * 槽号（大端 u32）。一级 u-boot 只按这个值挑一段二级 u-boot 去验、去执行，
+ * 而每段二级 u-boot 又只启动自己那一段的 kernel/rootfs —— 所以「切系统」
+ * 就等价于改这 4 个字节。这是网页控制台能一键切 A/B 槽的唯一机制，
+ * 不需要任何用户态脚本。
+ *
+ *   slot = 1  → image_1（B 槽：u-boot 0x0700000 / kernel 0x0880000 /
+ *                       rootfs 0x0FC0000，通常放原厂固件）
+ *   slot = 2  → image_2（A 槽：u-boot 0x4700000 / kernel 0x4880000 /
+ *                       rootfs 0x4FC0000，通常放 OpenWrt）
+ *
+ * 其它值一律拒绝（返回非 0），不写 flash。
+ *
+ * 实现是「整块 0x20000 读出 → 只改第 4~7 字节 → erase → write → 换缓冲回读」：
+ * 保留原厂在这一块里可能存在的其它字段，且回读不与写入源共用内存（避免同源自证）。
+ *
+ * 返回 0 = 已写入并回读核对通过。**不改动用哪一段启动，reset 之后才生效。**
+ */
+int tpimg_write_boot_flag(int slot);
 
+/* boot_flag 分区大小（写入时整块写，不做部分写） */
+#define TPIMG_BOOT_FLAG_LEN	0x00020000u
 #endif /* __TPLINK_TPIMG_H__ */

@@ -143,9 +143,67 @@ static void tplinkinfo_handler(enum httpd_uri_handler_status status,
 	respond_json(response, 200, buf, "application/json");
 	response->session_data = buf;
 }
+/*
+ * POST /bootflag   form: slot=1 | slot=2
+ *
+ * 切启动槽 —— 写 boot_flag 那 4 个字节，下次 reset 生效。
+ * 这是网页控制台替掉用户态脚本的唯一入口（原厂侧 wta301-slot、OpenWrt 侧
+ * wta301-slot 都是干这件事）。
+ *
+ * 为什么必须是 POST + multipart：
+ *   net/httpd.c:518 把 URI 里的 "?..." 直接截掉丢弃，GET 的 query 传不进
+ *   request->form；只有 multipart body 才会被解析进 form.values。
+ *   所以前端要用 FormData POST，不能写成 /bootflag?slot=1。
+ *
+ * 返回 JSON：
+ *   200 {"status":"success","info":{"slot":2,"name":"image_2","label":"A 槽"}}
+ *   400 {"status":"fail","reason":"bad_slot"}
+ *   500 {"status":"fail","reason":"write_failed"}   ← 已 printf 具体原因到串口
+ */
+static void bootflag_handler(enum httpd_uri_handler_status status,
+			     struct httpd_request *request,
+			     struct httpd_response *response)
+{
+	/* static：httpd 在连接关闭后才把 body 发完，用 malloc 又不 free
+	 * 就是每次请求漏 200 字节；failsafe 是单用户控制台，静态缓冲够了。 */
+	static char buf[192];
+	struct httpd_form_value *v;
+	int slot = 0;
+
+	if (status != HTTP_CB_NEW)
+		return;
+
+	v = httpd_request_find_value(request, "slot");
+	if (v && v->data && v->size >= 1)
+		slot = v->data[0] - '0';
+
+	if (slot != 1 && slot != 2) {
+		printf("bootflag: bad slot value from web\n");
+		respond_json(response, 400,
+			     "{\"status\":\"fail\",\"reason\":\"bad_slot\"}",
+			     "application/json");
+		return;
+	}
+
+	if (tpimg_write_boot_flag(slot)) {
+		respond_json(response, 500,
+			     "{\"status\":\"fail\",\"reason\":\"write_failed\"}",
+			     "application/json");
+		return;
+	}
+
+	snprintf(buf, sizeof(buf),
+		 "{\"status\":\"success\",\"info\":{\"slot\":%d,"
+		 "\"name\":\"image_%d\",\"label\":\"%s\"}}",
+		 slot, slot, slot == 1 ? "B 槽" : "A 槽");
+
+	respond_json(response, 200, buf, "application/json");
+}
 
 void tplinkinfo_register_uri_handlers(struct httpd_instance *inst)
 {
 	httpd_register_uri_handler(inst, "/sysinfo/tplink",
 				   &tplinkinfo_handler, NULL);
+	httpd_register_uri_handler(inst, "/bootflag",
+				   &bootflag_handler, NULL);
 }

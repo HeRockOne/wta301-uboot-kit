@@ -1146,12 +1146,139 @@ static int tpl_boot_one(const char *name, u32 hdr_addr)
 	return -1;
 }
 
+/* 读 boot_flag 的槽号。返回 0 = 读到合法值并写入 *slot，-1 = 读失败或魔数不符。
+ *
+ * boot_flag 分区在物理 0x04000000，首 8 字节 = 魔数 0x55aa4246 + 槽号（大端 u32）。
+ * 一级 u-boot 就是按这个值决定加载哪一段的二级 u-boot，所以它是双槽的总开关。 */
+static int tpimg_read_boot_flag(int *slot)
+{
+	nand_info_t *nand = &nand_info[CONFIG_NAND_FLASH_INFO_IDX];
+	u8 bf[8];
+	size_t len = sizeof(bf);
+
+	if (nand_read(nand, TPIMG_BOOT_FLAG_OFF, &len, bf))
+		return -1;
+	if (len != sizeof(bf) || be32(bf) != TPIMG_BOOT_FLAG_MAGIC)
+		return -1;
+
+	*slot = (int)be32(bf + 4);
+	return 0;
+}
+
+/* 写 boot_flag 的槽号（1 = image_1 / B 槽，2 = image_2 / A 槽）。
+ *
+ * ★ 为什么这块内存用 static 而不是 malloc：
+ *   CONFIG_SYS_MALLOC_LEN 只有 756 KB，而 tpimg_get_status() 最坏要同时
+ *   持有 hdr(128K)+slot(256K)+dec(640K)。网页来切槽时很可能刚跑完一次
+ *   状态刷新，池子里还没还干净；这里再要 128 KB malloc 有 OOM 风险。
+ *   .bss 里的 static 不占镜像体积、也不和 httpd/tftp 抢池子。
+ *
+ * ★ 为什么回读要用另一个缓冲：
+ *   拿刚写下去的同一块内存回读比对，等于「同源自证」——写失败也看不出来。
+ *   单独 64 字节缓冲读头 8 字节，比的是 NAND 里真正落下去的东西。
+ */
+int tpimg_write_boot_flag(int slot)
+{
+	nand_info_t *nand = &nand_info[CONFIG_NAND_FLASH_INFO_IDX];
+	static u8 flag_buf[TPIMG_BOOT_FLAG_LEN] __aligned(64);
+	static u8 rdback[64] __aligned(64);
+	size_t len = TPIMG_BOOT_FLAG_LEN;
+	int old = 0, ret;
+
+	if (slot != 1 && slot != 2) {
+		printf("tpimg: refuse to write boot_flag=%d (only 1 or 2)\n",
+		       slot);
+		return -1;
+	}
+
+	if (tpimg_read_boot_flag(&old))
+		old = 0;
+
+	/* 整块读出现行内容做底本 */
+	if (nand_read(nand, TPIMG_BOOT_FLAG_OFF, &len, flag_buf) ||
+	    len != TPIMG_BOOT_FLAG_LEN) {
+		printf("tpimg: boot_flag read failed (got %lu bytes)\n",
+		       (ulong)len);
+		return -1;
+	}
+
+	/* 魔数不对就不碰它：那说明这个分区被别的东西改过，
+	 * 硬写等于把未知结构冲掉。 */
+	if (be32(flag_buf) != TPIMG_BOOT_FLAG_MAGIC) {
+		printf("tpimg: boot_flag magic is 0x%08x, expected 0x%08x\n"
+		       "tpimg: refuse to overwrite an unrecognized partition\n",
+		       be32(flag_buf), TPIMG_BOOT_FLAG_MAGIC);
+		return -1;
+	}
+
+	put_be32(flag_buf + 4, (u32)slot);
+
+	printf("\ntpimg: boot_flag %d -> %d (%s)\n", old, slot,
+	       slot == 1 ? "image_1 / B slot" : "image_2 / A slot");
+
+	ret = tpimg_run("nand erase 0x%x 0x%x", TPIMG_BOOT_FLAG_OFF,
+			TPIMG_BOOT_FLAG_LEN);
+	if (ret)
+		return ret;
+
+	ret = tpimg_run("nand write 0x%lx 0x%x 0x%x", (ulong)flag_buf,
+			TPIMG_BOOT_FLAG_OFF, TPIMG_BOOT_FLAG_LEN);
+	if (ret)
+		return ret;
+
+	/* 换缓冲回读核对 */
+	len = sizeof(rdback);
+	memset(rdback, 0, sizeof(rdback));
+	if (nand_read(nand, TPIMG_BOOT_FLAG_OFF, &len, rdback) ||
+	    len != sizeof(rdback)) {
+		printf("tpimg: boot_flag readback failed\n");
+		return -1;
+	}
+	if (be32(rdback) != TPIMG_BOOT_FLAG_MAGIC ||
+	    be32(rdback + 4) != (u32)slot) {
+		printf("tpimg: boot_flag readback mismatch "
+		       "(magic 0x%08x, slot %u, wanted %d)\n",
+		       be32(rdback), be32(rdback + 4), slot);
+		return -1;
+	}
+
+	printf("tpimg: boot_flag= OK, next reset boots %s\n",
+	       slot == 1 ? "image_1 (B slot)" : "image_2 (A slot)");
+	return 0;
+}
+/* 按 boot_flag 决定先试哪个槽。
+ *
+ *   1 -> 先试 image_1 段：u-boot 物理 0x00700000，TP 头物理 0x00800000
+ *   2 -> 先试 image_2 段：u-boot 物理 0x04700000，TP 头物理 0x04800000
+ *
+ * 原厂固件不读这个值，永远「先 image_2 再 image_1」，所以两块槽里的 u-boot
+ * 即使 md5 相同也只会启动 image_2 段的内核 —— 这才是「没法切系统」的真正原因。
+ *
+ * 注意两段都要试完：首选槽的 TP 头坏掉时自动落到另一段，比原厂多一层兜底。
+ * 读不到 boot_flag 或值不在 {1,2} 时退回原厂顺序（image_2 先），
+ * 保证「补丁行为」在异常情况下与改造前完全一致。
+ */
 int tpimg_boot_slot(void)
 {
-	if (tpl_boot_one("image_2", WTA301_TPHDR_OFF) == 0)
-		return 0;
-	if (tpl_boot_one("image_1", TPIMG_B_HDR_ADDR) == 0)
-		return 0;
+	int slot;
+
+	if (tpimg_read_boot_flag(&slot) == 0 && slot == 1) {
+		printf("tplboot: boot_flag=1 -> image_1 first\n");
+		if (tpl_boot_one("image_1", TPIMG_B_HDR_ADDR) == 0)
+			return 0;
+		puts("tplboot: image_1 unbootable, trying image_2\n");
+		if (tpl_boot_one("image_2", WTA301_TPHDR_OFF) == 0)
+			return 0;
+	} else {
+		if (tpimg_read_boot_flag(&slot) == 0)
+			printf("tplboot: boot_flag=%d -> image_2 first\n", slot);
+		if (tpl_boot_one("image_2", WTA301_TPHDR_OFF) == 0)
+			return 0;
+		puts("tplboot: image_2 unbootable, trying image_1\n");
+		if (tpl_boot_one("image_1", TPIMG_B_HDR_ADDR) == 0)
+			return 0;
+	}
+
 	puts("tplboot: no bootable TP slot\n");
 	return -1;
 }
