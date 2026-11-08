@@ -9,6 +9,17 @@
 > 上位工程是 **`wta301-2512`**（OpenWrt 25.12.6 移植仓），
 > 本仓是其 u-boot 部分的独立发布版；内容与那边 `patches/uboot/` 一致。
 
+![WTA301 U-Boot 恢复控制台](docs/images/failsafe-console.png)
+
+↑ `files/failsafe/fsdata/index.html` 渲染出来的网页恢复控制台：U-Boot 版本、
+板型/内存/NAND、网络参数、`boot_flag`、两个槽的校验状态，以及固件上传入口。
+
+> ⚠️ 这张图是**预览模式**截的 —— 页面检测到 `file://` 协议就走内建 mock 数据
+> （`index.html` 的 `var PREVIEW = (location.protocol === "file:")` 与 `var MOCK`），
+> 所以里面的 `image_2 active`、`boot_flag raw:2`、两槽相同 md5 都是**示例值**，
+> 不是某台具体板子的真实状态。真机状态下这些字段由 `/sysinfo`、`/sysinfo/tplink`
+> 从 NAND 实读。
+
 ---
 
 ## 1. 上游基座（tree 不进仓库）
