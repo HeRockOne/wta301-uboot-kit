@@ -256,6 +256,48 @@ grep -q 'd0ada9f7' README.md \
 sed -n '/^## 5\./,/^## 6\./p' README.md | grep -q '不要直接用' \
 	&& ok "README §5 明确标注 p18–p21 不可直接用" || bad "README §5 警告丢失"
 
+# ════════════════════════════════════════════════════════
+# 只查文档不够 —— 实际跑一遍 mk_uboot_slot.py 看能不能重现槽镜像。
+# 上面那两条只证明「README 写了期望值」，这条才证明「工具真能出那个值」。
+# 本机找不到 u-boot.bin 就跳过（正常：源码树不进仓库）。
+# ════════════════════════════════════════════════════════
+UB=""
+for c in "$(dirname "$HERE")/src/u-boot-2016/u-boot.bin" \
+         "$HOME/ub/u-boot-2016/u-boot.bin"; do
+	[ -f "$c" ] && { UB="$c"; break; }
+done
+if [ -z "$UB" ]; then
+	warn "未找到 u-boot.bin（正常：源码树不进仓库），槽镜像重出现已跳过"
+else
+	sz=$(stat -c%s "$UB" 2>/dev/null || :)
+	[ "$sz" = "556032" ] \
+		&& ok "u-boot.bin 尺寸 556032 B" \
+		|| bad "u-boot.bin 尺寸 $sz（应 556032）"
+	m=$(md5sum "$UB" 2>/dev/null | cut -d' ' -f1)
+	[ "$m" = "3a4cb00e37065936e5ff89cb5710a519" ] \
+		&& ok "u-boot.bin md5 与 §3 判据一致" \
+		|| warn "u-boot.bin md5 $m（与发布版不同 —— 若你刚重编过属正常）"
+	# 真重出一遍槽镜像
+	TMP=$(mktemp -d)
+	if python3 "$HERE/build/mk_uboot_slot.py" "$UB" "$TMP" >/dev/null 2>&1; then
+		SLOT=$(ls "$TMP"/*.bin 2>/dev/null | head -1)
+		if [ -n "$SLOT" ]; then
+			ssz=$(stat -c%s "$SLOT")
+			sm=$(md5sum "$SLOT" | cut -d' ' -f1)
+			[ "$ssz" = "262144" ] \
+				&& ok "槽镜像 262144 B" || bad "槽镜像 $ssz B（应 262144）"
+			[ "$sm" = "d0ada9f76e4f1aba9b96a559a5220cee" ] \
+				&& ok "槽镜像 md5 = d0ada9f7…（与板上实物一致）" \
+				|| warn "槽镜像 md5 $sm（期望 d0ada9f7…）"
+		else
+			bad "mk_uboot_slot.py 没产出 .bin"
+		fi
+	else
+		bad "mk_uboot_slot.py 执行失败"
+	fi
+	rm -rf "$TMP"
+fi
+
 # ══════════════════════════════════════════════════════════════════
 echo
 if [ $FAIL -eq 0 ]; then
