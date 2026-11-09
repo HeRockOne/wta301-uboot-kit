@@ -104,7 +104,7 @@
 | `failsafe/modules/tplinkinfo.c` | 151 | **新增**。`/sysinfo/tplink` —— 槽位判定与固件信息 API |
 | `failsafe/modules/modules.h` | 47 | 模块表 |
 | `failsafe/modules/Makefile` | 14 | 编译规则 |
-| `failsafe/fsdata/index.html` | 1118 | **重写**。网页恢复控制台 UI（中文、自研，无厂商素材） |
+| `failsafe/fsdata/index.html` | 1118 | **重写**。网页恢复控制台 UI（中文、新写，无厂商素材） |
 | `board/qca/arm/common/cmd_bootqca.c` | 1037 | 引导命令适配 |
 | `board/qca/arm/common/ethaddr.c` | 301 | MAC 地址从 ART/factory_info 读取 |
 | `arch/arm/cpu/armv7/qca/common/smem.c` | 1333 | SMEM 适配（共享内存，供上面几项查询板型） |
@@ -150,7 +150,7 @@ GPL-2.0 §3 要求随二进制提供「对应源码」（Corresponding Source）
    **许可兼容，无冲突**；
 2. 版权头全部原样保留（`verify-kit.sh` 逐文件校验，删了会报 FAIL）；
 3. 修改有声明（本文件）+ 分发二进制有对应源码（§3）；
-4. 未使用任何厂商专有素材：`index.html` 是自研中文 UI，`file(1)` 确认
+4. 未使用任何厂商专有素材：`index.html` 是新写的中文 UI，`file(1)` 确认
    `files/` 下无二进制 blob。
 
 **唯一的实际缺口不是法务，是工程**：内层基座 commit 未固定，

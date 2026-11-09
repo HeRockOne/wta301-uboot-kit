@@ -87,7 +87,7 @@ BSD-3-Clause 与 GPL-2.0 兼容（可组合进 GPL 作品），所以整仓按 G
 |---|---|
 | `board/ipq5018/Kconfig` | u-boot 惯例：Kconfig 不带许可头，上游同类文件都没有 |
 | `configs/ipq5018_tplink_wta301_defconfig` | defconfig 同样不带 |
-| `failsafe/fsdata/index.html` | **我们自研**的网页恢复 UI（无厂商素材），纯 HTML+JS，**没有嵌入任何第三方库**，所以不需要版权头。这个文件会被**逐字节嵌入 `u-boot.bin`**（经 LZMA 进槽镜像），改动会改变槽镜像 md5 —— 这是**预期行为**，P22 就是因为加了「启动槽」卡片而变成 `0cf778c2…`。归属在此处声明即可。 |
+| `failsafe/fsdata/index.html` | **本仓新写**的网页恢复 UI（无厂商素材），纯 HTML+JS，**没有嵌入任何第三方库**，所以不需要版权头。这个文件会被**逐字节嵌入 `u-boot.bin`**（经 LZMA 进槽镜像），改动会改变槽镜像 md5 —— 这是**预期行为**，P22 就是因为加了「启动槽」卡片而变成 `0cf778c2…`。归属在此处声明即可。 |
 
 ### 2.3 硬性约束
 
