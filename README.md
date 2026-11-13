@@ -1,4 +1,4 @@
-# WTA301 u-boot kit —— 源码复现包
+# TP-Link WTA301 u-boot kit —— 源码复现包
 
 > ## ⚠️ 免责声明 · 先读这一段
 >
